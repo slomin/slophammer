@@ -44,7 +44,17 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
   const repo = await repoPromise
   try {
     const result = await repo.classify(text)
-    log.info('classify:result dispatching', { requestId, verdict: result.verdict })
+    log.info('classify:result dispatching', {
+      requestId,
+      verdict: result.verdict,
+      probs: {
+        human: result.rawPct[0].toFixed(2),
+        lightly: result.rawPct[1].toFixed(2),
+        moderately: result.rawPct[2].toFixed(2),
+        heavily: result.rawPct[3].toFixed(2),
+      },
+      aiScore: result.aiScore.toFixed(3),
+    })
     broadcast({ type: 'classify:result', requestId, tabId, result })
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)

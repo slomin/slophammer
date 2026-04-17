@@ -27,10 +27,14 @@ export interface AttachOptions {
 }
 
 export function attachRuntimeRouter({ dispatch, logger }: AttachOptions): void {
+  // Returning a Promise keeps the service worker alive until dispatch resolves.
+  // A plain `return false` lets Chrome terminate the SW mid-flight, which drops
+  // the classify:result → tab forward when the SW was idle.
   browser.runtime.onMessage.addListener((message) => {
-    dispatch(message as ExtensionMessage).catch((err) => {
-      logger.error('router handler failed', { type: (message as { type?: unknown }).type, err: String(err) })
+    const type = (message as { type?: unknown }).type
+    logger.debug('router: received', { type })
+    return dispatch(message as ExtensionMessage).catch((err) => {
+      logger.error('router handler failed', { type, err: String(err) })
     })
-    return false
   })
 }

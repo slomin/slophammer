@@ -43,23 +43,26 @@ export default defineBackground(() => {
   const handlers: HandlerMap = {
     'classify:result': async (msg: ClassifyResultMessage) => {
       log.debug('router: classify:result → tab', { requestId: msg.requestId, tabId: msg.tabId })
-      chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {
+      // Await so the service worker stays alive until the tab actually receives it.
+      await chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {
         // Tab may have been closed — safe to ignore.
       })
     },
     'classify:error': async (msg: ClassifyErrorMessage) => {
       log.warn('router: classify:error → tab', { requestId: msg.requestId, error: msg.error })
-      chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {})
+      await chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {})
     },
     'model:status': async (msg: ModelStatusMessage) => {
       log.debug('router: model:status → broadcast', { status: msg.status })
       const tabs = await chrome.tabs.query({})
-      for (const t of tabs) if (t.id != null) chrome.tabs.sendMessage(t.id, msg).catch(() => {})
+      await Promise.all(
+        tabs.flatMap((t) => (t.id != null ? [chrome.tabs.sendMessage(t.id, msg).catch(() => {})] : [])),
+      )
     },
     'model:installed': async () => {
       log.info('router: model:installed → ensuring offscreen and triggering load')
       await ensureOffscreenDocument()
-      chrome.runtime.sendMessage({ type: 'model:load' }).catch(() => {})
+      await chrome.runtime.sendMessage({ type: 'model:load' }).catch(() => {})
     },
   }
 
