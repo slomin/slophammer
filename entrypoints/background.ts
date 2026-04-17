@@ -78,4 +78,8 @@ export default defineBackground(() => {
     }
     ensureOffscreenDocument().catch((err) => log.error('ensureOffscreen failed', String(err)))
   })
+
+  chrome.action.onClicked.addListener(() => {
+    chrome.runtime.openOptionsPage().catch((err) => log.error('openOptionsPage failed', String(err)))
+  })
 })

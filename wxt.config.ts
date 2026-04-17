@@ -29,6 +29,9 @@ export default defineConfig({
   manifest: {
     name: 'Slop Hammer',
     description: 'Local AI-text detector — right-click selected text.',
+    action: {
+      default_title: 'Slop Hammer — click to open options',
+    },
     permissions: [
       'contextMenus',
       'activeTab',

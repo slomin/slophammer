@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "chrome": "bash scripts/launch-chrome.sh",
+    "test-page": "node scripts/serve-test-page.mjs",
     "setup:chrome": "node scripts/install-chrome-for-testing.mjs",
     "typecheck": "tsc --noEmit",
     "postinstall": "wxt prepare"
@@ -22,6 +23,7 @@
     "@types/chrome": "^0.1.40",
     "@types/node": "^25.6.0",
     "happy-dom": "^20.9.0",
+    "sharp": "^0.34.5",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4",
     "wxt": "^0.20.23"
