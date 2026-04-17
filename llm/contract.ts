@@ -24,6 +24,15 @@ export const CORE_MODEL_FILES = [
   'model_q4f16.onnx',
 ] as const
 
+export const OPTIONAL_MODEL_FILES = [
+  'config.json',
+  'README.md',
+  'sanity_examples.json',
+  'special_tokens_map.json',
+] as const
+
+export const SHARD_FILENAME_PATTERN = /^model_q4f16\.onnx\.data_\d+$/
+
 export function validateContract(c: unknown): asserts c is SlopHammerContract {
   if (!c || typeof c !== 'object') {
     throw new Error('Contract is not an object')

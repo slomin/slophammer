@@ -4,17 +4,70 @@
     <meta charset="utf-8" />
     <title>Slop Hammer — Options</title>
     <style>
-      html, body { margin: 0; padding: 0; font-family: ui-monospace, Menlo, monospace; background: #0b0b0c; color: #e5e5e5; }
-      body { padding: 24px; max-width: 560px; }
-      h1 { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; color: #a5ffa5; }
-      p { color: #b5b5b8; line-height: 1.5; }
-      code { background: #151517; border: 1px solid #2a2a2d; padding: 2px 4px; border-radius: 3px; }
+      :root {
+        --bg: #0b0b0c;
+        --fg: #e5e5e5;
+        --muted: #8a8a90;
+        --panel: #151517;
+        --border: #2a2a2d;
+        --accent: #a5ffa5;
+        --danger: #ff8080;
+        --mono: ui-monospace, Menlo, monospace;
+      }
+      html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: var(--mono); }
+      body { padding: 24px; max-width: 640px; }
+      h1 { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0 0 18px; }
+      h2 { font-size: 15px; margin: 0 0 6px; }
+      p { margin: 4px 0; }
+      code { background: var(--panel); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; }
+      .muted { color: var(--muted); font-size: 13px; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 14px; }
+      .drop-zone {
+        border: 1px dashed var(--border);
+        border-radius: 6px;
+        padding: 24px;
+        text-align: center;
+        cursor: pointer;
+        background: var(--panel);
+      }
+      .drop-zone.dragover { border-color: var(--accent); }
+      .btn {
+        display: inline-block;
+        margin-top: 10px;
+        padding: 6px 14px;
+        background: #1e1e22;
+        color: var(--fg);
+        border: 1px solid #3a3a3f;
+        border-radius: 4px;
+        font: inherit;
+        cursor: pointer;
+      }
+      .btn:hover { background: #28282d; }
+      .btn.danger { border-color: var(--danger); color: var(--danger); }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 16px;
+      }
+      .card.installed { display: flex; gap: 12px; align-items: center; }
+      .card.installed .info { flex: 1; }
+      .card.error { border-color: var(--danger); }
+      .check { font-size: 20px; color: var(--accent); }
+      .progress-bar {
+        margin-top: 12px;
+        height: 6px;
+        background: #111114;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .progress-bar > div { height: 100%; background: var(--accent); transition: width 120ms ease; }
     </style>
   </head>
   <body>
     <h1>Slop Hammer — Options</h1>
-    <p>Model installer ships in a later phase. Current build uses a deterministic <code>FakeClassifierRepository</code>.</p>
-    <p>Select text ≥ 75 characters on any page, right-click, and choose <code>Check with Slop Hammer</code>.</p>
+    <section id="install"></section>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

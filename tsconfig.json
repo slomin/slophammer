@@ -11,6 +11,7 @@
     "messaging/**/*",
     "background/**/*",
     "content/**/*",
+    "install/**/*",
     "entrypoints/**/*",
     "tests/**/*",
     "*.ts",
