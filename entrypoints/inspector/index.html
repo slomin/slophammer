@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Slop Hammer — Inspector</title>
+    <style>
+      html, body { margin: 0; padding: 0; font-family: ui-monospace, Menlo, monospace; background: #0b0b0c; color: #e5e5e5; }
+      body { padding: 12px; }
+      h1 { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #8a8a8a; margin: 0 0 8px; }
+      #log { font-size: 12px; white-space: pre-wrap; }
+      .line { padding: 2px 0; border-bottom: 1px solid #1a1a1d; }
+      .debug { color: #8a8a8a; }
+      .info { color: #d0d0d0; }
+      .warn { color: #e0c070; }
+      .error { color: #ff8080; }
+    </style>
+  </head>
+  <body>
+    <h1>Inspector — unified extension log</h1>
+    <div id="log"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

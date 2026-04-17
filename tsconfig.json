@@ -1,0 +1,16 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    ".wxt/**/*",
+    "llm/**/*",
+    "messaging/**/*",
+    "entrypoints/**/*",
+    "tests/**/*",
+    "*.ts",
+    "*.mjs"
+  ]
+}

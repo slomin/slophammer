@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Slop Hammer</title>
+    <style>
+      html, body { margin: 0; padding: 0; font-family: ui-monospace, Menlo, monospace; background: #0b0b0c; color: #e5e5e5; }
+      body { width: 380px; padding: 12px; }
+      h1 { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #8a8a8a; margin: 0 0 8px; }
+      textarea { width: 100%; box-sizing: border-box; height: 120px; background: #151517; color: #e5e5e5; border: 1px solid #2a2a2d; padding: 8px; font: inherit; resize: vertical; }
+      button { margin-top: 8px; padding: 6px 12px; background: #1e1e22; color: #e5e5e5; border: 1px solid #3a3a3f; cursor: pointer; font: inherit; }
+      button:hover { background: #2a2a30; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      .label { color: #8a8a8a; font-size: 11px; }
+      pre { margin: 0; font-size: 14px; color: #a5ffa5; }
+    </style>
+  </head>
+  <body>
+    <h1>Slop Hammer</h1>
+    <textarea id="input" placeholder="paste text"></textarea>
+    <button id="score">score</button>
+    <div class="row">
+      <span class="label">slop:</span>
+      <pre id="result" data-testid="result">—</pre>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "name": "slophammer",
+  "version": "0.0.1",
+  "description": "Chrome extension that scores text for AI-slop content.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "chrome": "bash scripts/launch-chrome.sh",
+    "setup:chrome": "node scripts/install-chrome-for-testing.mjs",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "packageManager": "pnpm@10.20.0",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@puppeteer/browsers": "^2.13.0",
+    "@types/chrome": "^0.1.40",
+    "@types/node": "^25.6.0",
+    "happy-dom": "^20.9.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4",
+    "wxt": "^0.20.23"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
