@@ -37,6 +37,9 @@ export function attachRuntimeRouter({ dispatch, logger }: AttachOptions): void {
   // Returning a Promise keeps the SW alive until dispatch resolves.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const type = (message as { type?: unknown }).type
+    // LOG messages are logger output; dispatching them through the router
+    // just floods the console since the router's own logs also emit LOGs.
+    if (type === 'LOG') return false
     // Use info so this is visible in Chrome DevTools at the default log level.
     logger.info('router: received', { type })
     dispatch(message as ExtensionMessage)

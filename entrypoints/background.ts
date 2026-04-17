@@ -73,12 +73,29 @@ export default defineBackground(() => {
     logger: log,
   })
 
-  chrome.runtime.onInstalled.addListener((details) => {
+  chrome.runtime.onInstalled.addListener(async (details) => {
     log.info('onInstalled', { reason: details.reason })
     if (details.reason === 'install') {
       chrome.tabs.create({ url: chrome.runtime.getURL('options.html') }).catch(() => {})
     }
     ensureOffscreenDocument().catch((err) => log.error('ensureOffscreen failed', String(err)))
+    // After install or reload, existing tabs still have the OLD (or no)
+    // content script. Re-inject into every matching tab so the user doesn't
+    // need to refresh pages after `chrome.runtime.reload()`.
+    try {
+      const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+      for (const tab of tabs) {
+        if (tab.id == null) continue
+        chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            files: ['content-scripts/content.js'],
+          })
+          .catch((err) => log.debug('re-inject content script failed', { tabId: tab.id, err: String(err) }))
+      }
+    } catch (err) {
+      log.warn('content-script re-injection query failed', String(err))
+    }
   })
 
   chrome.action.onClicked.addListener(() => {

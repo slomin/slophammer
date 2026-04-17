@@ -92,6 +92,35 @@ describe('renderState — ready', () => {
     expect(testId(card.shadow, 'bar-mixed')?.dataset.pct).toBe('0')
     expect(testId(card.shadow, 'bar-ai')?.dataset.pct).toBe('100')
   })
+
+  it('renders the full 4-class raw breakdown', () => {
+    const card = buildCard()
+    renderState(card, {
+      kind: 'ready',
+      requestId: 'r1',
+      preview: 'abc',
+      wordCount: 1,
+      result: aiResult,
+    })
+    const rawValue = (id: string) =>
+      testId(card.shadow, id)?.querySelector<HTMLElement>('.raw-value')?.textContent
+    expect(rawValue('raw-human')).toBe('5%')
+    expect(rawValue('raw-lightly')).toBe('10%')
+    expect(rawValue('raw-moderately')).toBe('15%')
+    expect(rawValue('raw-heavily')).toBe('70%')
+  })
+
+  it('clears the raw breakdown in loading / error / idle states', () => {
+    const card = buildCard()
+    renderState(card, {
+      kind: 'ready', requestId: 'r1', preview: 'x', wordCount: 1, result: aiResult,
+    })
+    renderState(card, { kind: 'loading', requestId: 'r2', preview: 'x', wordCount: 1 })
+    const rawValue = (id: string) =>
+      testId(card.shadow, id)?.querySelector<HTMLElement>('.raw-value')?.textContent
+    expect(rawValue('raw-human')).toBe('—')
+    expect(rawValue('raw-heavily')).toBe('—')
+  })
 })
 
 describe('renderState — error', () => {

@@ -4,7 +4,7 @@ const PORT = 8765
 
 const SAMPLES = [
   {
-    label: 'Human — frustrated developer rant',
+    label: 'Ambiguous — developer rant (prior benchmark: AI-Assisted)',
     text: `got pulled into a meeting today. apparently we're adding an Agentic AI to the team. it will learn our environment, handle tasks autonomously, and integrate via API. it does not need onboarding, a desk, or health insurance. Great.
 
 i have one question nobody in that meeting could answer. how does it actually work? not philosophically. like what is the system. because from what i can tell it's an LLM with tools strapped to it, some kind of memory layer nobody can fully explain, and a control loop that lets it run without a human saying yes to every step. which means somewhere in my company's stack there is now a process with access to our tools, our data, and apparently a better performance review than me, and i genuinely do not understand the architecture.`,
@@ -52,7 +52,7 @@ const html = `<!doctype html>
   <section>
     <h2>${i + 1}. ${s.label}</h2>
     <p>${s.text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])}</p>
-    <div class="hint">${s.text.length} chars · ${s.text.trim().split(/\\s+/).length} words</div>
+    <div class="hint">${s.text.length} chars · ${s.text.trim().split(/\s+/).length} words</div>
   </section>`,
   ).join('')}
 </body>

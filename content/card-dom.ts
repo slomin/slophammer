@@ -2,6 +2,13 @@ import { CARD_STYLES } from './styles'
 
 export const CARD_TAG = 'slop-hammer-card'
 
+export interface RawBreakdownRefs {
+  human: HTMLElement
+  lightly: HTMLElement
+  moderately: HTMLElement
+  heavily: HTMLElement
+}
+
 export interface CardRefs {
   root: HTMLElement
   preview: HTMLElement
@@ -12,6 +19,7 @@ export interface CardRefs {
   barHuman: HTMLElement
   barMixed: HTMLElement
   barAi: HTMLElement
+  raw: RawBreakdownRefs
   errorMessage: HTMLElement
   dismissButton: HTMLButtonElement
 }
@@ -27,6 +35,20 @@ function el<T extends HTMLElement>(tag: string, testId?: string, attrs?: Record<
   if (testId) node.dataset.testid = testId
   if (attrs) for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
   return node
+}
+
+function rawRow(testId: string, label: string): { root: HTMLElement; value: HTMLElement } {
+  const row = el<HTMLDivElement>('div', testId)
+  row.className = 'raw-row'
+  const name = document.createElement('span')
+  name.className = 'raw-name'
+  name.textContent = label
+  const value = document.createElement('span')
+  value.className = 'raw-value'
+  value.textContent = '—'
+  row.appendChild(name)
+  row.appendChild(value)
+  return { root: row, value }
 }
 
 export function buildCard(): CardElements {
@@ -72,6 +94,19 @@ export function buildCard(): CardElements {
   bars.appendChild(barAi)
   root.appendChild(bars)
 
+  // Raw 4-class breakdown (matches the model contract's n_buckets=4).
+  const rawGrid = el<HTMLDivElement>('div', 'raw-grid')
+  rawGrid.className = 'raw-grid'
+  const human = rawRow('raw-human', 'Human')
+  const lightly = rawRow('raw-lightly', 'Lightly AI')
+  const moderately = rawRow('raw-moderately', 'Moderately AI')
+  const heavily = rawRow('raw-heavily', 'Heavily AI')
+  rawGrid.appendChild(human.root)
+  rawGrid.appendChild(lightly.root)
+  rawGrid.appendChild(moderately.root)
+  rawGrid.appendChild(heavily.root)
+  root.appendChild(rawGrid)
+
   const errorMessage = el<HTMLDivElement>('div', 'error-message')
   root.appendChild(errorMessage)
 
@@ -95,6 +130,12 @@ export function buildCard(): CardElements {
       barHuman,
       barMixed,
       barAi,
+      raw: {
+        human: human.value,
+        lightly: lightly.value,
+        moderately: moderately.value,
+        heavily: heavily.value,
+      },
       errorMessage,
       dismissButton,
     },

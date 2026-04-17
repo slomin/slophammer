@@ -1,4 +1,5 @@
 import { formatPct } from '@/llm/classify-result'
+import type { RawProbs } from '@/llm/classify-result'
 import type { CardElements } from './card-dom'
 import type { CardState } from './state'
 
@@ -23,6 +24,7 @@ export function renderState(card: CardElements, state: CardState): void {
       setVisible(refs.primaryLabel, false)
       setVisible(refs.errorMessage, false)
       setVisible(refs.dismissButton, false)
+      setRawBreakdown(card, null)
       return
 
     case 'loading':
@@ -36,6 +38,7 @@ export function renderState(card: CardElements, state: CardState): void {
       setVisible(refs.errorMessage, false)
       setVisible(refs.dismissButton, false)
       setBarPcts(card, 0, 0, 0)
+      setRawBreakdown(card, null)
       return
 
     case 'ready': {
@@ -52,6 +55,7 @@ export function renderState(card: CardElements, state: CardState): void {
       setVisible(refs.primaryLabel, true)
 
       setBarPcts(card, result.humanPct, result.mixedPct, result.aiPct)
+      setRawBreakdown(card, result.rawPct)
 
       setVisible(refs.errorMessage, false)
       setVisible(refs.dismissButton, true)
@@ -70,6 +74,7 @@ export function renderState(card: CardElements, state: CardState): void {
       setVisible(refs.errorMessage, true)
       setVisible(refs.dismissButton, true)
       setBarPcts(card, 0, 0, 0)
+      setRawBreakdown(card, null)
       return
   }
 }
@@ -78,4 +83,19 @@ function setBarPcts(card: CardElements, humanPct: number, mixedPct: number, aiPc
   card.refs.barHuman.dataset.pct = String(Math.round(humanPct))
   card.refs.barMixed.dataset.pct = String(Math.round(mixedPct))
   card.refs.barAi.dataset.pct = String(Math.round(aiPct))
+}
+
+function setRawBreakdown(card: CardElements, rawPct: RawProbs | null): void {
+  const { raw } = card.refs
+  if (!rawPct) {
+    raw.human.textContent = '—'
+    raw.lightly.textContent = '—'
+    raw.moderately.textContent = '—'
+    raw.heavily.textContent = '—'
+    return
+  }
+  raw.human.textContent = formatPct(rawPct[0]) + '%'
+  raw.lightly.textContent = formatPct(rawPct[1]) + '%'
+  raw.moderately.textContent = formatPct(rawPct[2]) + '%'
+  raw.heavily.textContent = formatPct(rawPct[3]) + '%'
 }

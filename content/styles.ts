@@ -39,6 +39,18 @@ export const CARD_STYLES = `
   .bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; font-size: 11px; }
   .bars > div { background: #1a1a1e; border: 1px solid #2a2a2f; border-radius: 4px; padding: 4px 6px; text-align: center; }
   .bars > div[data-pct="100"] { background: #1e2e1e; border-color: #a5ffa5; color: #a5ffa5; }
+  .raw-grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2a2f;
+    font-size: 11px;
+  }
+  .raw-grid .raw-row { display: contents; }
+  .raw-grid .raw-name { color: #8a8a90; }
+  .raw-grid .raw-value { color: #e8e8ea; text-align: right; font-variant-numeric: tabular-nums; }
   [data-testid="error-message"] { color: #ff8080; margin-top: 6px; }
   [data-testid="dismiss-button"] {
     margin-top: 10px; padding: 4px 10px;
