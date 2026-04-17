@@ -2,12 +2,15 @@
   "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
     "strict": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "types": ["chrome", "node"]
   },
   "include": [
     ".wxt/**/*",
     "llm/**/*",
     "messaging/**/*",
+    "background/**/*",
+    "content/**/*",
     "entrypoints/**/*",
     "tests/**/*",
     "*.ts",

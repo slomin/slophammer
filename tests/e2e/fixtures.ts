@@ -46,4 +46,15 @@ export const test = base.extend<{
   },
 })
 
+export async function gotoHtml(page: import('@playwright/test').Page, body: string, urlPath = '/t.html'): Promise<void> {
+  const url = `http://slop-hammer.test${urlPath}`
+  await page.route(`${url}*`, (route) =>
+    route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html><html><body>${body}</body></html>`,
+    }),
+  )
+  await page.goto(url)
+}
+
 export const expect = test.expect

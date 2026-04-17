@@ -1,29 +1,78 @@
-import { createLlmRepository } from '@/llm'
+import {
+  registerContextMenu,
+  type ContextMenuLogger,
+} from '@/background/context-menu'
+import {
+  attachRuntimeRouter,
+  createMessageDispatcher,
+  type HandlerMap,
+} from '@/background/message-router'
+import { ensureOffscreenDocument } from '@/background/offscreen-manager'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
-import type { ExtensionMessage, ScoreResponse } from '@/messaging/protocol'
+import type {
+  ClassifyErrorMessage,
+  ClassifyResultMessage,
+  ClassifyRunMessage,
+  ModelStatusMessage,
+  SelectionTooShortMessage,
+  ClassifyStartedMessage,
+} from '@/messaging/protocol'
 
 export default defineBackground(() => {
   installErrorForwarding('background')
   const log = createLogger('background')
-  const llm = createLlmRepository()
-
   log.info('service worker booted')
 
-  browser.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
-    if (message.type === 'SCORE_REQUEST') {
-      llm
-        .scoreSlop(message.text)
-        .then((score) => {
-          log.debug('scored', { preview: message.text.slice(0, 40), score })
-          const response: ScoreResponse = { type: 'SCORE_RESPONSE', score }
-          sendResponse(response)
-        })
-        .catch((err) => {
-          log.error('scoring failed', String(err))
-          sendResponse({ type: 'SCORE_RESPONSE', score: -1 } satisfies ScoreResponse)
-        })
-      return true
+  const menuLogger: ContextMenuLogger = {
+    info: (msg, data) => log.info(msg, data),
+    warn: (msg, data) => log.warn(msg, data),
+  }
+
+  registerContextMenu({
+    logger: menuLogger,
+    sendToTab: (tabId, msg: SelectionTooShortMessage | ClassifyStartedMessage) => {
+      chrome.tabs.sendMessage(tabId, msg).catch((err) => log.warn('sendToTab failed', String(err)))
+    },
+    sendToRuntime: (msg: ClassifyRunMessage) => {
+      chrome.runtime.sendMessage(msg).catch((err) => log.warn('sendToRuntime failed', String(err)))
+    },
+    ensureOffscreen: ensureOffscreenDocument,
+    newRequestId: () => crypto.randomUUID(),
+  })
+
+  const handlers: HandlerMap = {
+    'classify:result': async (msg: ClassifyResultMessage) => {
+      log.debug('router: classify:result → tab', { requestId: msg.requestId, tabId: msg.tabId })
+      chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {
+        // Tab may have been closed — safe to ignore.
+      })
+    },
+    'classify:error': async (msg: ClassifyErrorMessage) => {
+      log.warn('router: classify:error → tab', { requestId: msg.requestId, error: msg.error })
+      chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {})
+    },
+    'model:status': async (msg: ModelStatusMessage) => {
+      log.debug('router: model:status → broadcast', { status: msg.status })
+      const tabs = await chrome.tabs.query({})
+      for (const t of tabs) if (t.id != null) chrome.tabs.sendMessage(t.id, msg).catch(() => {})
+    },
+    'model:installed': async () => {
+      log.info('router: model:installed → ensuring offscreen and triggering load')
+      await ensureOffscreenDocument()
+      chrome.runtime.sendMessage({ type: 'model:load' }).catch(() => {})
+    },
+  }
+
+  attachRuntimeRouter({
+    dispatch: createMessageDispatcher(handlers),
+    logger: log,
+  })
+
+  chrome.runtime.onInstalled.addListener((details) => {
+    log.info('onInstalled', { reason: details.reason })
+    if (details.reason === 'install') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('options.html') }).catch(() => {})
     }
-    return false
+    ensureOffscreenDocument().catch((err) => log.error('ensureOffscreen failed', String(err)))
   })
 })

@@ -1,8 +1,9 @@
-import { FakeLlmRepository } from './fake-llm-repository'
-import type { LlmRepository } from './llm-repository'
+import type { ClassifierRepository } from './classifier-repository'
+import { FakeClassifierRepository } from './fake-classifier-repository'
 
-export type { LlmRepository } from './llm-repository'
+export type { ClassifierRepository } from './classifier-repository'
+export type { ClassifyResult, RawProbs, Verdict, PrimaryLabel } from './classify-result'
 
-export function createLlmRepository(): LlmRepository {
-  return new FakeLlmRepository()
+export function createClassifierRepository(): ClassifierRepository {
+  return new FakeClassifierRepository()
 }
