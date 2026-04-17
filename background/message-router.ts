@@ -18,6 +18,7 @@ export function createMessageDispatcher(handlers: HandlerMap): MessageDispatcher
 
 export interface MessageRouterLogger {
   debug(msg: string, data?: unknown): void
+  info(msg: string, data?: unknown): void
   error(msg: string, data?: unknown): void
 }
 
@@ -36,7 +37,8 @@ export function attachRuntimeRouter({ dispatch, logger }: AttachOptions): void {
   // Returning a Promise keeps the SW alive until dispatch resolves.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const type = (message as { type?: unknown }).type
-    logger.debug('router: received', { type })
+    // Use info so this is visible in Chrome DevTools at the default log level.
+    logger.info('router: received', { type })
     dispatch(message as ExtensionMessage)
       .catch((err) => {
         logger.error('router handler failed', { type, err: String(err) })

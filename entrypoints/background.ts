@@ -42,15 +42,17 @@ export default defineBackground(() => {
 
   const handlers: HandlerMap = {
     'classify:result': async (msg: ClassifyResultMessage) => {
-      log.debug('router: classify:result → tab', { requestId: msg.requestId, tabId: msg.tabId })
+      log.info('router: classify:result → tab', { requestId: msg.requestId, tabId: msg.tabId })
       // Await so the service worker stays alive until the tab actually receives it.
-      await chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {
-        // Tab may have been closed — safe to ignore.
-      })
+      await chrome.tabs.sendMessage(msg.tabId, msg).catch((err) =>
+        log.warn('tabs.sendMessage(classify:result) failed', String(err)),
+      )
     },
     'classify:error': async (msg: ClassifyErrorMessage) => {
       log.warn('router: classify:error → tab', { requestId: msg.requestId, error: msg.error })
-      await chrome.tabs.sendMessage(msg.tabId, msg).catch(() => {})
+      await chrome.tabs.sendMessage(msg.tabId, msg).catch((err) =>
+        log.warn('tabs.sendMessage(classify:error) failed', String(err)),
+      )
     },
     'model:status': async (msg: ModelStatusMessage) => {
       log.debug('router: model:status → broadcast', { status: msg.status })
