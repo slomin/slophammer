@@ -127,33 +127,14 @@ describe('reduceCardState — classify:error', () => {
 })
 
 describe('reduceCardState — model:status', () => {
-  it('loading + not-installed → error with installer hint', () => {
-    const next = reduceCardState(loading('r1'), {
-      type: 'model:status',
-      status: 'not-installed',
-    })
-    expect(next.kind).toBe('error')
-    if (next.kind === 'error') {
-      expect(next.error).toMatch(/install/i)
-    }
-  })
-
-  it('loading + loading(progress) stays loading (no premature error)', () => {
-    const state = loading('r1')
-    const next = reduceCardState(state, {
-      type: 'model:status',
-      status: 'loading',
-      progress: 42,
-    })
-    expect(next).toEqual(state)
-  })
-
-  it('idle + any status → idle (no orphan cards)', () => {
-    const next = reduceCardState(initialCardState, {
-      type: 'model:status',
-      status: 'not-installed',
-    })
-    expect(next).toEqual(initialCardState)
+  it('any state × any status → no change (informational only in Phase 2)', () => {
+    const ls = loading('r1')
+    expect(reduceCardState(ls, { type: 'model:status', status: 'loading', progress: 42 })).toBe(ls)
+    expect(reduceCardState(ls, { type: 'model:status', status: 'not-installed' })).toBe(ls)
+    expect(reduceCardState(ls, { type: 'model:status', status: 'ready' })).toBe(ls)
+    expect(
+      reduceCardState(initialCardState, { type: 'model:status', status: 'not-installed' }),
+    ).toEqual(initialCardState)
   })
 })
 

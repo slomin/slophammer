@@ -23,41 +23,49 @@ test('content script renders result card on classify dispatch', async ({ context
   }, page.url().split('?')[0])
   expect(tabId, 'SW could not find the test page tab').toBeGreaterThan(0)
 
-  // Ensure the content script is alive by pinging it. We retry for up to ~3s
-  // to ride over the short delay between navigation and content-script injection.
-  const pingOk = await worker.evaluate(async (tabId) => {
-    for (let i = 0; i < 30; i++) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tabId as number },
-          func: () => 'alive',
-        })
-        return true
-      } catch {
-        await new Promise((r) => setTimeout(r, 100))
-      }
-    }
-    return false
-  }, tabId)
-  expect(pingOk, 'content-script frame never became executable').toBe(true)
-
+  // Ensure the offscreen document exists before dispatching — its creation is
+  // async and racy against a fresh profile launch. The content script is also
+  // only registered after navigation completes, so classify:started is retried.
   const requestId = 'e2e-' + Date.now()
-
   await worker.evaluate(
     async ([tabId, requestId, text]) => {
-      await chrome.tabs.sendMessage(tabId as number, {
+      await chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification: 'e2e smoke',
+      }).catch(() => { /* already exists */ })
+
+      const startedMsg = {
         type: 'classify:started',
         requestId: requestId as string,
         preview: (text as string).slice(0, 200),
         wordCount: (text as string).trim().split(/\s+/).length,
         charCount: (text as string).length,
-      })
-      await chrome.runtime.sendMessage({
-        type: 'classify:run',
-        requestId: requestId as string,
-        tabId: tabId as number,
-        text: text as string,
-      })
+      }
+      for (let i = 0; i < 50; i++) {
+        try {
+          await chrome.tabs.sendMessage(tabId as number, startedMsg)
+          break
+        } catch {
+          await new Promise((r) => setTimeout(r, 100))
+        }
+      }
+
+      // classify:run goes to the offscreen doc (runtime broadcast). Retry in
+      // case offscreen is still booting.
+      for (let i = 0; i < 50; i++) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'classify:run',
+            requestId: requestId as string,
+            tabId: tabId as number,
+            text: text as string,
+          })
+          break
+        } catch {
+          await new Promise((r) => setTimeout(r, 100))
+        }
+      }
     },
     [tabId, requestId, LONG_TEXT],
   )

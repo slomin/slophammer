@@ -6,4 +6,5 @@ chrome-for-testing/
 stats.html
 test-results/
 playwright-report/
+public/ort/
 references/

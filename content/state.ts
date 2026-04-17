@@ -11,9 +11,6 @@ export type CardAction = ExtensionMessage | { type: 'dismiss' }
 
 export const initialCardState: CardState = { kind: 'idle' }
 
-const MODEL_NOT_INSTALLED_MSG =
-  'Model is not installed. Open Slop Hammer options to install.'
-
 export function reduceCardState(state: CardState, action: CardAction): CardState {
   switch (action.type) {
     case 'dismiss':
@@ -50,16 +47,9 @@ export function reduceCardState(state: CardState, action: CardAction): CardState
       }
 
     case 'model:status':
-      if (state.kind === 'idle') return state
-      if (action.status === 'not-installed') {
-        return {
-          kind: 'error',
-          requestId: state.requestId,
-          preview: state.preview,
-          wordCount: state.wordCount,
-          error: MODEL_NOT_INSTALLED_MSG,
-        }
-      }
+      // The card reducer doesn't react to status transitions in Phase 2 —
+      // model:status is informational; classify:result / classify:error drive
+      // the card state. A later phase may reintroduce a status-driven UX.
       return state
 
     default:

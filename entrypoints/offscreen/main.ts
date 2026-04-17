@@ -1,56 +1,67 @@
-import { createClassifierRepository } from '@/llm'
+import { createClassifierRepository, FakeClassifierRepository } from '@/llm'
+import type { ClassifierRepository } from '@/llm'
+import { setupOnnxClassifier } from '@/llm/onnx-setup'
+import { isModelInstalled } from '@/llm/opfs-model-reader'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
-import { isClassifyRun, isModelLoad, type ExtensionMessage } from '@/messaging/protocol'
+import {
+  isClassifyRun,
+  isModelLoad,
+  type ClassifyRunMessage,
+  type ExtensionMessage,
+} from '@/messaging/protocol'
 
 installErrorForwarding('offscreen')
 const log = createLogger('offscreen')
-const classifier = createClassifierRepository()
 
+function broadcast(message: ExtensionMessage): void {
+  browser.runtime.sendMessage(message).catch(() => {
+    // Fire-and-forget — no listener is an expected cold-start state.
+  })
+}
+
+function startFactory(): Promise<ClassifierRepository> {
+  return createClassifierRepository({
+    isModelInstalled,
+    createOnnxClassifier: () =>
+      setupOnnxClassifier((p) => {
+        const pct = Math.round(2 + (p.bytesRead / Math.max(1, p.totalBytes)) * 78)
+        broadcast({ type: 'model:status', status: 'loading', progress: pct })
+      }),
+    createFakeClassifier: () => {
+      log.warn('using FakeClassifierRepository — real model unavailable')
+      return new FakeClassifierRepository()
+    },
+    onStatus: broadcast,
+  })
+}
+
+let repoPromise: Promise<ClassifierRepository> = startFactory()
 log.info('offscreen booted')
 
-browser.runtime
-  .sendMessage({ type: 'model:status', status: 'ready' } satisfies ExtensionMessage)
-  .catch(() => {
-    // sink unattached — no listeners yet during SW cold start
-  })
+async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
+  const { requestId, tabId, text } = message
+  log.debug('classify:run received', { requestId, tabId, length: text.length })
+  const repo = await repoPromise
+  try {
+    const result = await repo.classify(text)
+    log.info('classify:result dispatching', { requestId, verdict: result.verdict })
+    broadcast({ type: 'classify:result', requestId, tabId, result })
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    log.error('classify failed', error)
+    broadcast({ type: 'classify:error', requestId, tabId, error })
+  }
+}
 
 browser.runtime.onMessage.addListener((raw) => {
   if (isModelLoad(raw)) {
-    browser.runtime
-      .sendMessage({ type: 'model:status', status: 'ready' } satisfies ExtensionMessage)
-      .catch(() => {})
+    log.info('model:load received — re-initialising classifier')
+    repoPromise = startFactory()
     return false
   }
-
   if (isClassifyRun(raw)) {
-    const { requestId, tabId, text } = raw
-    log.debug('classify:run received', { requestId, tabId, length: text.length })
-    classifier
-      .classify(text)
-      .then((result) => {
-        log.info('classify:result dispatching', { requestId, verdict: result.verdict })
-        return browser.runtime.sendMessage({
-          type: 'classify:result',
-          requestId,
-          tabId,
-          result,
-        } satisfies ExtensionMessage)
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err)
-        log.error('classify failed', message)
-        return browser.runtime.sendMessage({
-          type: 'classify:error',
-          requestId,
-          tabId,
-          error: message,
-        } satisfies ExtensionMessage)
-      })
-      .catch(() => {
-        // Nothing listening — swallow.
-      })
+    void handleClassifyRun(raw)
     return false
   }
-
   return false
 })
