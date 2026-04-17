@@ -1,89 +1,45 @@
-// Rebuild the extension + refresh the canonical release folder + force the
-// running Chrome for Testing instance (launched via `pnpm chrome`) to
-// re-install the service worker from the freshly-built files. No manual
-// click in chrome://extensions required.
+// Refresh the release folder and cleanly restart Chrome for Testing so the
+// new SW + manifest are loaded from disk. `chrome.runtime.reload()` is not
+// reliable in MV3 — it sometimes leaves the extension disabled. A kill +
+// relaunch of CfT (with the same --user-data-dir so the OPFS model stays)
+// is the only way to guarantee the next SW boot picks up the built files.
 
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 
 const CDP_URL = process.env.CDP_URL ?? 'http://127.0.0.1:9222'
 
 execSync('pnpm release', { stdio: 'inherit' })
 
-async function json(path) {
-  const r = await fetch(CDP_URL + path)
-  if (!r.ok) throw new Error('CDP ' + path + ' ' + r.status)
-  return r.json()
-}
-
-async function wakeSW() {
-  const pages = await json('/json/list')
-  const extPage = pages.find((p) => p.url?.startsWith('chrome-extension://'))
-  if (!extPage) {
-    throw new Error(
-      'No extension page is open — open chrome-extension://<id>/inspector.html in CfT so the SW can be woken.',
-    )
-  }
-  const ws = new WebSocket(extPage.webSocketDebuggerUrl)
-  await new Promise((r) => ws.addEventListener('open', r))
-  await new Promise((resolve) => {
-    const id = 1
-    ws.addEventListener('message', (e) => {
-      if (JSON.parse(e.data).id === id) resolve()
-    })
-    ws.send(
-      JSON.stringify({
-        id,
-        method: 'Runtime.evaluate',
-        params: {
-          expression: `chrome.runtime.sendMessage({type:"wake"}).catch(()=>{})`,
-          awaitPromise: true,
-          returnByValue: true,
-        },
-      }),
-    )
-  })
-  ws.close()
-}
-
-async function getSW() {
-  for (let i = 0; i < 30; i++) {
-    const tabs = await json('/json/list')
-    const sw = tabs.find((t) => t.type === 'service_worker' && t.url?.includes('elalp'))
-    if (sw) return sw.webSocketDebuggerUrl
-    await new Promise((r) => setTimeout(r, 150))
-  }
-  return null
-}
-
-async function reload() {
-  await wakeSW()
-  const swUrl = await getSW()
-  if (!swUrl) throw new Error('could not locate service worker target')
-  const ws = new WebSocket(swUrl)
-  await new Promise((r) => ws.addEventListener('open', r))
-  await new Promise((resolve) => {
-    const id = 1
-    ws.addEventListener('message', (e) => {
-      if (JSON.parse(e.data).id === id) resolve()
-    })
-    ws.send(
-      JSON.stringify({
-        id,
-        method: 'Runtime.evaluate',
-        params: {
-          expression: `chrome.runtime.reload()`,
-          returnByValue: true,
-        },
-      }),
-    )
-  })
-  ws.close()
-  console.log('Extension reloaded.')
-}
-
 try {
-  await reload()
-} catch (err) {
-  console.error('Reload failed:', err.message)
-  process.exit(1)
+  // pnpm chrome launches via bash; grep for the exact Chrome process.
+  execSync(
+    "ps aux | grep 'remote-debugging-port=9222' | grep -v grep | awk '{print $2}' | xargs -r kill",
+    { stdio: 'inherit', shell: '/bin/bash' },
+  )
+} catch {
+  // ok if nothing was running
 }
+
+// Give the OS a moment to release the port.
+await new Promise((r) => setTimeout(r, 500))
+
+const child = spawn('pnpm', ['chrome'], {
+  stdio: 'ignore',
+  detached: true,
+})
+child.unref()
+
+// Wait until CDP is ready
+const deadline = Date.now() + 10_000
+while (Date.now() < deadline) {
+  try {
+    const r = await fetch(CDP_URL + '/json/version')
+    if (r.ok) {
+      console.log('CfT is up.')
+      process.exit(0)
+    }
+  } catch {}
+  await new Promise((r) => setTimeout(r, 200))
+}
+console.error('Timed out waiting for CfT.')
+process.exit(1)

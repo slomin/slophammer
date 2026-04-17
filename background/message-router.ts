@@ -40,8 +40,11 @@ export function attachRuntimeRouter({ dispatch, logger }: AttachOptions): void {
     // LOG messages are logger output; dispatching them through the router
     // just floods the console since the router's own logs also emit LOGs.
     if (type === 'LOG') return false
-    // Use info so this is visible in Chrome DevTools at the default log level.
-    logger.info('router: received', { type })
+    // Debug-level so the stream isn't flooded with every incoming message;
+    // the handler-level logs (classify:result → tab, model:installed,
+    // classify:error, …) stay at info/warn for visibility at default log
+    // level. Enable Verbose in DevTools to re-surface this trace.
+    logger.debug('router: received', { type })
     dispatch(message as ExtensionMessage)
       .catch((err) => {
         logger.error('router handler failed', { type, err: String(err) })
