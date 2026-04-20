@@ -68,7 +68,10 @@ export const CARD_STYLES = `
   .sh-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; margin-bottom: 10px;
+    cursor: grab;
+    user-select: none;
   }
+  .sh-card[data-dragging="true"] .sh-head { cursor: grabbing; }
   .sh-brand {
     display: inline-flex; align-items: center; gap: 7px;
     font-weight: 600; font-size: 11.5px; letter-spacing: 0.02em;

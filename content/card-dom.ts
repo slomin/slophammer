@@ -14,6 +14,7 @@ export interface AdvancedRowRefs {
 
 export interface CardRefs {
   root: HTMLElement
+  head: HTMLElement
   headBrand: HTMLElement
   headVersion: HTMLElement
   btnMinimise: HTMLButtonElement
@@ -292,6 +293,7 @@ export function buildCard(): CardElements {
     shadow,
     refs: {
       root,
+      head: head.head,
       headBrand: head.brand,
       headVersion: head.version,
       btnMinimise: head.minimise,

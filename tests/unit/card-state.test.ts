@@ -77,6 +77,12 @@ describe('buildCard', () => {
     expect(testId(card.shadow, 'btn-close')).not.toBeNull()
   })
 
+  it('exposes the head element as a drag handle', () => {
+    const card = buildCard()
+    expect(card.refs.head).toBeInstanceOf(HTMLElement)
+    expect(card.refs.head.classList.contains('sh-head')).toBe(true)
+  })
+
   it('renders all structural sections up front', () => {
     const card = buildCard()
     for (const id of [

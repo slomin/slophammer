@@ -38,6 +38,10 @@ export default defineContentScript({
     let state: CardState = initialCardState
     let card: CardElements | null = null
     let lastRect: DOMRect | null = null
+    // Once the user has dragged the card, `position()` must stop yanking it
+    // back under the selection. Reset on each new classify:started so a fresh
+    // selection gets the default auto-placement.
+    let isDragged = false
 
     function applyTheme(c: CardElements, isDark: boolean) {
       c.refs.root.classList.toggle('dark', isDark)
@@ -68,9 +72,42 @@ export default defineContentScript({
         c.refs.root.dataset.mode = pressed ? 'basic' : 'advanced'
       })
 
+      // Drag by the head row. Buttons stop propagation so clicks on the
+      // minimise/close icons still act as clicks, not drag handles.
+      for (const btn of [c.refs.btnMinimise, c.refs.btnClose]) {
+        btn.addEventListener('mousedown', (e) => e.stopPropagation())
+      }
+      c.refs.head.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        const rect = c.refs.root.getBoundingClientRect()
+        const offsetX = e.clientX - rect.left
+        const offsetY = e.clientY - rect.top
+        c.refs.root.dataset.dragging = 'true'
+        const onMove = (ev: MouseEvent) => {
+          const w = c.refs.root.offsetWidth || 320
+          const h = c.refs.root.offsetHeight || 180
+          const maxLeft = Math.max(0, window.innerWidth - w)
+          const maxTop = Math.max(0, window.innerHeight - h)
+          const left = Math.min(Math.max(0, ev.clientX - offsetX), maxLeft)
+          const top = Math.min(Math.max(0, ev.clientY - offsetY), maxTop)
+          c.refs.root.style.left = `${left}px`
+          c.refs.root.style.top = `${top}px`
+        }
+        const onUp = () => {
+          isDragged = true
+          delete c.refs.root.dataset.dragging
+          window.removeEventListener('mousemove', onMove, true)
+          window.removeEventListener('mouseup', onUp, true)
+        }
+        window.addEventListener('mousemove', onMove, true)
+        window.addEventListener('mouseup', onUp, true)
+      })
+
       // Re-clamp the card to the viewport whenever its size changes, so that
       // opening the advanced drawer (or restoring from minimised) near the
-      // bottom of the page doesn't push the lower rows off-screen.
+      // bottom of the page doesn't push the lower rows off-screen. Skipped
+      // once the user has taken manual control via drag.
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
           if (state.kind !== 'idle') position(c)
@@ -84,6 +121,7 @@ export default defineContentScript({
 
     function position(c: CardElements) {
       if (!lastRect) return
+      if (isDragged) return
       const p = computeCardPosition({
         selection: toSelectionRect(lastRect),
         viewport: currentViewport(),
@@ -103,6 +141,7 @@ export default defineContentScript({
         c.refs.root.dataset.mode = 'basic'
         c.refs.modeToggle.setAttribute('aria-pressed', 'false')
         c.refs.btnMinimise.textContent = '—'
+        isDragged = false
       }
       renderState(c, state)
       if (state.kind !== 'idle') position(c)
