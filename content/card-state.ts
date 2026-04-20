@@ -42,7 +42,7 @@ export function renderState(card: CardElements, state: CardState): void {
 
     case 'loading':
       refs.preview.textContent = state.preview
-      refs.wordCount.textContent = `${state.wordCount} w`
+      refs.wordCount.textContent = `${state.wordCount} words`
       show(refs.loadingRow)
       hide(refs.verdictBox)
       hide(refs.modeRow)
@@ -53,7 +53,7 @@ export function renderState(card: CardElements, state: CardState): void {
 
     case 'ready': {
       refs.preview.textContent = state.preview
-      refs.wordCount.textContent = `${state.wordCount} w`
+      refs.wordCount.textContent = `${state.wordCount} words`
       renderReady(card, state.result)
       hide(refs.loadingRow)
       hide(refs.errorBox)
@@ -71,7 +71,7 @@ export function renderState(card: CardElements, state: CardState): void {
 
     case 'error':
       refs.preview.textContent = state.preview
-      refs.wordCount.textContent = `${state.wordCount} w`
+      refs.wordCount.textContent = `${state.wordCount} words`
       refs.errorMessage.textContent = state.error
       show(refs.errorBox)
       show(refs.actionsRow)

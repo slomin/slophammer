@@ -71,7 +71,7 @@ describe('buildCard', () => {
 
   it('renders head with brand, version, minimise and close controls', () => {
     const card = buildCard()
-    expect(testId(card.shadow, 'head-brand')?.textContent).toContain('slop/hammer')
+    expect(testId(card.shadow, 'head-brand')?.textContent).toContain('Slop Hammer')
     expect(testId(card.shadow, 'head-version')).not.toBeNull()
     expect(testId(card.shadow, 'btn-minimise')).not.toBeNull()
     expect(testId(card.shadow, 'btn-close')).not.toBeNull()
@@ -134,7 +134,7 @@ describe('renderState — loading', () => {
     const root = testId(card.shadow, 'card-root')
     expect(root?.dataset.state).toBe('loading')
     expect(testId(card.shadow, 'preview')?.textContent).toContain('lorem ipsum dolor')
-    expect(testId(card.shadow, 'word-count')?.textContent).toBe('3 w')
+    expect(testId(card.shadow, 'word-count')?.textContent).toBe('3 words')
     expect(isHidden(testId(card.shadow, 'loading-row'))).toBe(false)
     expect(testId(card.shadow, 'loading-label')?.textContent).toBe('analysing')
   })

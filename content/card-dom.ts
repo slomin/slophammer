@@ -76,7 +76,7 @@ function buildHead(): { head: HTMLElement; brand: HTMLElement; version: HTMLElem
 
   const brand = el<HTMLSpanElement>('span', { className: 'sh-brand', testId: 'head-brand' })
   brand.appendChild(el<HTMLSpanElement>('span', { className: 'sh-mark' }))
-  brand.appendChild(document.createTextNode('slop/hammer '))
+  brand.appendChild(document.createTextNode('Slop Hammer '))
   const version = el<HTMLSpanElement>('span', { className: 'ver', testId: 'head-version', text: CARD_VERSION })
   brand.appendChild(version)
 
