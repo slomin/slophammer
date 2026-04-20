@@ -13,6 +13,7 @@
     "chrome": "bash scripts/launch-chrome.sh",
     "chrome:real": "bash scripts/launch-real-chrome.sh",
     "test-page": "node scripts/serve-test-page.mjs",
+    "qa": "node scripts/qa-setup.mjs",
     "release": "node scripts/release.mjs",
     "reload": "node scripts/reload-extension.mjs",
     "setup:chrome": "node scripts/install-chrome-for-testing.mjs",

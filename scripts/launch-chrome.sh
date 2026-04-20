@@ -32,4 +32,7 @@ exec "$BIN" \
   --use-mock-keychain \
   --password-store=basic \
   --no-first-run \
-  --no-default-browser-check
+  --no-default-browser-check \
+  --hide-crash-restore-bubble \
+  --disable-features=InfiniteSessionRestore \
+  "$@"
