@@ -91,19 +91,67 @@ test('content script renders result card on classify dispatch', async ({ context
     const s = el.shadowRoot!
     const q = (id: string) => s.querySelector<HTMLElement>(`[data-testid="${id}"]`)
     return {
-      primaryLabel: q('primary-label')?.textContent ?? null,
-      primaryPct: q('primary-pct')?.textContent ?? null,
-      aiPct: q('bar-ai')?.dataset.pct ?? null,
-      mixedPct: q('bar-mixed')?.dataset.pct ?? null,
-      humanPct: q('bar-human')?.dataset.pct ?? null,
+      verdictLabel: q('verdict-label')?.textContent ?? null,
+      verdictBig: q('verdict-big')?.textContent ?? null,
+      verdictSide: q('verdict-box')?.dataset.verdict ?? null,
+      rawPcts: [0, 1, 2, 3].map((i) => q(`raw-${i}`)?.querySelector<HTMLElement>('.fill')?.dataset.pct ?? null),
+      headVersion: q('head-version')?.textContent ?? null,
     }
   })
 
-  expect(['AI-Generated', 'AI-Assisted', 'Human Written']).toContain(snapshot.primaryLabel)
-  expect(snapshot.primaryPct).toMatch(/^\d+(\.\d)?$|^100$/)
-  const buckets = [snapshot.aiPct, snapshot.mixedPct, snapshot.humanPct]
-  expect(buckets.filter((b) => b === '100')).toHaveLength(1)
-  expect(buckets.filter((b) => b === '0')).toHaveLength(2)
+  expect(['HUMAN', 'AI', 'HUMAN-LEANING', 'AI-LEANING']).toContain(snapshot.verdictLabel)
+  expect(snapshot.verdictBig).toMatch(/^\d+$/)
+  expect(['human', 'ai']).toContain(snapshot.verdictSide)
+  expect(snapshot.rawPcts.every((v) => v !== null && /^\d+$/.test(v!))).toBe(true)
+  expect(snapshot.headVersion).toBe('v0.3')
+})
+
+test('advanced toggle expands the 4-bucket drawer', async ({ context }) => {
+  const page = await context.newPage()
+  await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`)
+  await page.waitForLoadState('domcontentloaded')
+  const card = await dispatchClassification(context, page, LONG_TEXT)
+  await expect(card).toBeAttached({ timeout: 4000 })
+  await expect
+    .poll(async () => card.evaluate((el) =>
+      el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.state ?? null,
+    ), { timeout: 4000 })
+    .toBe('ready')
+
+  await card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="mode-toggle"]')?.click(),
+  )
+
+  const mode = await card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.mode ?? null,
+  )
+  expect(mode).toBe('advanced')
+})
+
+test('minimise collapses to head row and restores', async ({ context }) => {
+  const page = await context.newPage()
+  await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`)
+  await page.waitForLoadState('domcontentloaded')
+  const card = await dispatchClassification(context, page, LONG_TEXT)
+  await expect(card).toBeAttached({ timeout: 4000 })
+  await expect
+    .poll(async () => card.evaluate((el) =>
+      el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.state ?? null,
+    ), { timeout: 4000 })
+    .toBe('ready')
+
+  const readView = () => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.view ?? null,
+  )
+  const clickMinimise = () => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="btn-minimise"]')?.click(),
+  )
+
+  expect(await readView()).toBe('full')
+  await clickMinimise()
+  expect(await readView()).toBe('minimised')
+  await clickMinimise()
+  expect(await readView()).toBe('full')
 })
 
 test('content script remains visible when the page hides undefined custom elements', async ({ context }) => {

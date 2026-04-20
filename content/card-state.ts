@@ -1,14 +1,28 @@
-import { formatPct } from '@/llm/classify-result'
-import type { RawProbs } from '@/llm/classify-result'
+import type { ClassifyResult, RawProbs } from '@/llm/classify-result'
 import type { CardElements } from './card-dom'
 import type { CardState } from './state'
+import { computeBinary, verdictDescriptor } from './verdict'
 
-function setVisible(el: HTMLElement, visible: boolean): void {
-  el.classList.toggle('hide', !visible)
+function show(el: HTMLElement): void {
+  el.classList.remove('hide')
 }
 
-function setText(el: HTMLElement, text: string): void {
-  el.textContent = text
+function hide(el: HTMLElement): void {
+  el.classList.add('hide')
+}
+
+function setPct(el: HTMLElement, pct: number): void {
+  const rounded = Math.round(pct)
+  el.dataset.pct = String(rounded)
+  el.style.width = `${rounded}%`
+}
+
+function argmax(rawPct: RawProbs): 0 | 1 | 2 | 3 {
+  let best: 0 | 1 | 2 | 3 = 0
+  for (let i = 1 as 1 | 2 | 3; i < 4; i++) {
+    if (rawPct[i]! > rawPct[best]!) best = i
+  }
+  return best
 }
 
 export function renderState(card: CardElements, state: CardState): void {
@@ -17,85 +31,87 @@ export function renderState(card: CardElements, state: CardState): void {
 
   switch (state.kind) {
     case 'idle':
-      setVisible(refs.preview, false)
-      setVisible(refs.wordCount, false)
-      setVisible(refs.spinner, false)
-      setVisible(refs.primaryPct, false)
-      setVisible(refs.primaryLabel, false)
-      setVisible(refs.errorMessage, false)
-      setVisible(refs.dismissButton, false)
-      setRawBreakdown(card, null)
+      // Host stays in DOM but card-root display:none keeps it invisible.
+      hide(refs.loadingRow)
+      hide(refs.verdictBox)
+      hide(refs.modeRow)
+      hide(refs.advanced)
+      hide(refs.errorBox)
+      hide(refs.actionsRow)
       return
 
     case 'loading':
-      setText(refs.preview, state.preview)
-      setText(refs.wordCount, `${state.wordCount} words`)
-      setVisible(refs.preview, true)
-      setVisible(refs.wordCount, true)
-      setVisible(refs.spinner, true)
-      setVisible(refs.primaryPct, false)
-      setVisible(refs.primaryLabel, false)
-      setVisible(refs.errorMessage, false)
-      setVisible(refs.dismissButton, false)
-      setBarPcts(card, 0, 0, 0)
-      setRawBreakdown(card, null)
+      refs.preview.textContent = state.preview
+      refs.wordCount.textContent = `${state.wordCount} w`
+      show(refs.loadingRow)
+      hide(refs.verdictBox)
+      hide(refs.modeRow)
+      hide(refs.advanced)
+      hide(refs.errorBox)
+      hide(refs.actionsRow)
       return
 
     case 'ready': {
-      const { result } = state
-      setText(refs.preview, state.preview)
-      setText(refs.wordCount, `${state.wordCount} words`)
-      setVisible(refs.preview, true)
-      setVisible(refs.wordCount, true)
-      setVisible(refs.spinner, false)
-
-      setText(refs.primaryPct, formatPct(result.primaryPct))
-      setText(refs.primaryLabel, result.primaryLabel)
-      setVisible(refs.primaryPct, true)
-      setVisible(refs.primaryLabel, true)
-
-      setBarPcts(card, result.humanPct, result.mixedPct, result.aiPct)
-      setRawBreakdown(card, result.rawPct)
-
-      setVisible(refs.errorMessage, false)
-      setVisible(refs.dismissButton, true)
+      refs.preview.textContent = state.preview
+      refs.wordCount.textContent = `${state.wordCount} w`
+      renderReady(card, state.result)
+      hide(refs.loadingRow)
+      hide(refs.errorBox)
+      show(refs.verdictBox)
+      show(refs.modeRow)
+      // advanced drawer visibility is gated by .hide (structural) and data-mode (expansion)
+      show(refs.advanced)
+      show(refs.actionsRow)
+      refs.actionsRow.classList.remove('single')
+      show(refs.btnCopy)
+      show(refs.btnShare)
+      hide(refs.dismissButton)
       return
     }
 
     case 'error':
-      setText(refs.preview, state.preview)
-      setText(refs.wordCount, `${state.wordCount} words`)
-      setText(refs.errorMessage, state.error)
-      setVisible(refs.preview, true)
-      setVisible(refs.wordCount, true)
-      setVisible(refs.spinner, false)
-      setVisible(refs.primaryPct, false)
-      setVisible(refs.primaryLabel, false)
-      setVisible(refs.errorMessage, true)
-      setVisible(refs.dismissButton, true)
-      setBarPcts(card, 0, 0, 0)
-      setRawBreakdown(card, null)
+      refs.preview.textContent = state.preview
+      refs.wordCount.textContent = `${state.wordCount} w`
+      refs.errorMessage.textContent = state.error
+      show(refs.errorBox)
+      show(refs.actionsRow)
+      refs.actionsRow.classList.add('single')
+      hide(refs.btnCopy)
+      hide(refs.btnShare)
+      show(refs.dismissButton)
+      hide(refs.loadingRow)
+      hide(refs.verdictBox)
+      hide(refs.modeRow)
+      hide(refs.advanced)
       return
   }
 }
 
-function setBarPcts(card: CardElements, humanPct: number, mixedPct: number, aiPct: number): void {
-  card.refs.barHuman.dataset.pct = String(Math.round(humanPct))
-  card.refs.barMixed.dataset.pct = String(Math.round(mixedPct))
-  card.refs.barAi.dataset.pct = String(Math.round(aiPct))
-}
+function renderReady(card: CardElements, result: ClassifyResult): void {
+  const { refs } = card
+  const binary = computeBinary(result.rawPct)
+  const descriptor = verdictDescriptor(binary.winPct, binary.winner)
 
-function setRawBreakdown(card: CardElements, rawPct: RawProbs | null): void {
-  const { raw } = card.refs
-  if (!rawPct) {
-    raw.human.textContent = '—'
-    raw.lightly.textContent = '—'
-    raw.moderately.textContent = '—'
-    raw.heavily.textContent = '—'
-    return
+  refs.verdictBox.dataset.verdict = descriptor.side
+  refs.verdictLabel.textContent = descriptor.label
+  refs.verdictConfidence.textContent = descriptor.confidenceText
+  refs.verdictBig.textContent = String(Math.round(binary.winPct))
+  refs.verdictText.textContent = descriptor.sentence
+
+  const humanRounded = Math.round(binary.humanBinary)
+  const aiRounded = Math.round(binary.aiBinary)
+  setPct(refs.binaryBarHuman, binary.humanBinary)
+  setPct(refs.binaryBarAi, binary.aiBinary)
+  refs.binaryLegendHuman.textContent = `HUMAN ${humanRounded}%`
+  refs.binaryLegendAi.textContent = `${aiRounded}% AI`
+
+  const winIdx = argmax(result.rawPct)
+  for (let i = 0; i < 4; i++) {
+    const row = refs.advancedRows[i as 0 | 1 | 2 | 3]
+    const pct = Math.round(result.rawPct[i as 0 | 1 | 2 | 3])
+    setPct(row.fill, pct)
+    row.pct.textContent = `${pct}%`
+    if (i === winIdx) row.root.dataset.winner = 'true'
+    else delete row.root.dataset.winner
   }
-  raw.human.textContent = formatPct(rawPct[0]) + '%'
-  raw.lightly.textContent = formatPct(rawPct[1]) + '%'
-  raw.moderately.textContent = formatPct(rawPct[2]) + '%'
-  raw.heavily.textContent = formatPct(rawPct[3]) + '%'
 }

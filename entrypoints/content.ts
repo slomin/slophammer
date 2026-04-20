@@ -39,11 +39,35 @@ export default defineContentScript({
     let card: CardElements | null = null
     let lastRect: DOMRect | null = null
 
+    function applyTheme(c: CardElements, isDark: boolean) {
+      c.refs.root.classList.toggle('dark', isDark)
+      c.refs.root.classList.toggle('light', !isDark)
+    }
+
     function mountCard(): CardElements {
       if (card) return card
       const c = buildCard()
       document.body.appendChild(c.host)
+
+      const mql = window.matchMedia('(prefers-color-scheme: dark)')
+      applyTheme(c, mql.matches)
+      mql.addEventListener('change', (e) => applyTheme(c, e.matches))
+
       c.refs.dismissButton.addEventListener('click', () => applyAction({ type: 'dismiss' }))
+      c.refs.btnClose.addEventListener('click', () => applyAction({ type: 'dismiss' }))
+
+      c.refs.btnMinimise.addEventListener('click', () => {
+        const minimised = c.refs.root.dataset.view === 'minimised'
+        c.refs.root.dataset.view = minimised ? 'full' : 'minimised'
+        c.refs.btnMinimise.textContent = minimised ? '—' : '+'
+      })
+
+      c.refs.modeToggle.addEventListener('click', () => {
+        const pressed = c.refs.modeToggle.getAttribute('aria-pressed') === 'true'
+        c.refs.modeToggle.setAttribute('aria-pressed', String(!pressed))
+        c.refs.root.dataset.mode = pressed ? 'basic' : 'advanced'
+      })
+
       card = c
       return c
     }
@@ -64,6 +88,12 @@ export default defineContentScript({
       state = reduceCardState(prev, action)
       if (state === prev) return
       const c = mountCard()
+      if (action.type === 'classify:started') {
+        c.refs.root.dataset.view = 'full'
+        c.refs.root.dataset.mode = 'basic'
+        c.refs.modeToggle.setAttribute('aria-pressed', 'false')
+        c.refs.btnMinimise.textContent = '—'
+      }
       renderState(c, state)
       if (state.kind !== 'idle') position(c)
     }
