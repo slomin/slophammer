@@ -11,6 +11,9 @@ import {
   isSelectionTooShort,
   type ExtensionMessage,
 } from '@/messaging/protocol'
+import { resolveTheme } from '@/settings/resolve-theme'
+import { createChromeSettingsStore } from '@/settings/settings-store'
+import { DEFAULT_SETTINGS, type Settings } from '@/settings/settings-types'
 
 function captureSelectionRect(): DOMRect | null {
   const sel = window.getSelection()
@@ -43,9 +46,27 @@ export default defineContentScript({
     // selection gets the default auto-placement.
     let isDragged = false
 
-    function applyTheme(c: CardElements, isDark: boolean) {
-      c.refs.root.classList.toggle('dark', isDark)
-      c.refs.root.classList.toggle('light', !isDark)
+    const settingsStore = createChromeSettingsStore()
+    let settings: Settings = DEFAULT_SETTINGS
+    const systemDarkMql = window.matchMedia('(prefers-color-scheme: dark)')
+
+    settingsStore
+      .get()
+      .then((s) => {
+        settings = s
+        if (card) applyTheme(card)
+      })
+      .catch((err) => log.error('settings load failed', err))
+
+    settingsStore.subscribe((next) => {
+      settings = next
+      if (card) applyTheme(card)
+    })
+
+    function applyTheme(c: CardElements) {
+      const resolved = resolveTheme(settings.theme, systemDarkMql.matches)
+      c.refs.root.classList.toggle('dark', resolved === 'dark')
+      c.refs.root.classList.toggle('light', resolved === 'light')
     }
 
     function mountCard(): CardElements {
@@ -53,9 +74,8 @@ export default defineContentScript({
       const c = buildCard()
       document.body.appendChild(c.host)
 
-      const mql = window.matchMedia('(prefers-color-scheme: dark)')
-      applyTheme(c, mql.matches)
-      mql.addEventListener('change', (e) => applyTheme(c, e.matches))
+      applyTheme(c)
+      systemDarkMql.addEventListener('change', () => applyTheme(c))
 
       c.refs.dismissButton.addEventListener('click', () => applyAction({ type: 'dismiss' }))
       c.refs.btnClose.addEventListener('click', () => applyAction({ type: 'dismiss' }))
@@ -138,8 +158,9 @@ export default defineContentScript({
       const c = mountCard()
       if (action.type === 'classify:started') {
         c.refs.root.dataset.view = 'full'
-        c.refs.root.dataset.mode = 'basic'
-        c.refs.modeToggle.setAttribute('aria-pressed', 'false')
+        const startMode = settings.resultDetail
+        c.refs.root.dataset.mode = startMode
+        c.refs.modeToggle.setAttribute('aria-pressed', String(startMode === 'advanced'))
         c.refs.btnMinimise.textContent = '—'
         isDragged = false
       }

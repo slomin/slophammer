@@ -12,6 +12,7 @@
     "background/**/*",
     "content/**/*",
     "install/**/*",
+    "settings/**/*",
     "entrypoints/**/*",
     "tests/**/*",
     "*.ts",

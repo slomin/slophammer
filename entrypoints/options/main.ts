@@ -11,12 +11,36 @@ import { ChromeStorageMarker, OpfsWriter, wipeModel } from '@/install/opfs-write
 import { parseSentinel } from '@/install/sentinel'
 import { MODEL_ROOT_DIR, SENTINEL_NAME } from '@/llm/opfs-model-reader'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
+import { resolveTheme } from '@/settings/resolve-theme'
+import { createChromeSettingsStore } from '@/settings/settings-store'
+import type { Settings } from '@/settings/settings-types'
+import { renderSettings } from './settings-renderer'
 
 installErrorForwarding('options')
 const log = createLogger('options')
 
 const root = document.getElementById('install')!
+const settingsRoot = document.getElementById('settings')!
+const settingsStore = createChromeSettingsStore()
+const systemDarkMql = window.matchMedia('(prefers-color-scheme: dark)')
+let currentSettings: Settings | null = null
 let state: InstallState = initialInstallState
+
+function applyTheme(settings: Settings) {
+  const resolved = resolveTheme(settings.theme, systemDarkMql.matches)
+  document.documentElement.dataset.theme = resolved
+}
+
+function rerenderSettings(settings: Settings) {
+  renderSettings(settingsRoot, settings, {
+    onResultDetailChange: (value) => {
+      settingsStore.set({ resultDetail: value }).catch((err) => log.error('set resultDetail failed', err))
+    },
+    onThemeChange: (value) => {
+      settingsStore.set({ theme: value }).catch((err) => log.error('set theme failed', err))
+    },
+  })
+}
 
 function dispatch(action: InstallAction) {
   const next = reduceInstallState(state, action)
@@ -83,13 +107,26 @@ async function installFromFile(file: File) {
 }
 
 async function bootstrap() {
+  currentSettings = await settingsStore.get()
+  applyTheme(currentSettings)
+  rerenderSettings(currentSettings)
+
+  settingsStore.subscribe((next) => {
+    currentSettings = next
+    applyTheme(next)
+    rerenderSettings(next)
+  })
+  systemDarkMql.addEventListener('change', () => {
+    if (currentSettings) applyTheme(currentSettings)
+  })
+
   const sentinel = await readSentinelFile()
   if (sentinel) {
     dispatch({ type: 'detected-installed', ...sentinel })
   } else {
     dispatch({ type: 'detected-empty' })
   }
-  log.info('options page opened', { initial: state.kind })
+  log.info('options page opened', { initial: state.kind, settings: currentSettings })
 }
 
 renderInstall(root, state, handlers)
