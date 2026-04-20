@@ -10,6 +10,8 @@ describe('buildSentinel', () => {
     expect(payload.contractFile).toBe('slop_hammer_contract.json')
     expect(payload.installedAt).toBeGreaterThanOrEqual(before)
     expect(payload.installedAt).toBeLessThanOrEqual(after)
+    expect(payload.source).toBe('manual')
+    expect(payload.hosted).toBeUndefined()
   })
 
   it('accepts explicit installedAt for deterministic tests', () => {
@@ -20,6 +22,21 @@ describe('buildSentinel', () => {
     })
     expect(payload.installedAt).toBe(1700000000000)
   })
+
+  it('marks source as hosted and preserves hosted metadata when provided', () => {
+    const payload = buildSentinel({
+      checkpointId: 'v1',
+      contractFile: 'slop_hammer_contract.json',
+      hosted: {
+        filename: 'slop_hammer_0_8b_v0_1.zip',
+        lfsOid: 'deadbeef',
+        url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+      },
+    })
+    expect(payload.source).toBe('hosted')
+    expect(payload.hosted?.filename).toBe('slop_hammer_0_8b_v0_1.zip')
+    expect(payload.hosted?.lfsOid).toBe('deadbeef')
+  })
 })
 
 describe('parseSentinel', () => {
@@ -28,9 +45,35 @@ describe('parseSentinel', () => {
       checkpointId: 'ckpt4500',
       installedAt: 1700000000000,
       contractFile: 'slop_hammer_contract.json',
+      source: 'manual',
     }
     const parsed = parseSentinel(JSON.stringify(original))
     expect(parsed).toEqual(original)
+  })
+
+  it('treats legacy sentinels (without source) as manual', () => {
+    const raw = '{"checkpointId":"x","installedAt":1,"contractFile":"slop_hammer_contract.json"}'
+    expect(parseSentinel(raw)).toEqual({
+      checkpointId: 'x',
+      installedAt: 1,
+      contractFile: 'slop_hammer_contract.json',
+      source: 'manual',
+    })
+  })
+
+  it('round-trips hosted metadata', () => {
+    const original: SentinelPayload = {
+      checkpointId: 'ckpt4500',
+      installedAt: 1700000000000,
+      contractFile: 'slop_hammer_contract.json',
+      source: 'hosted',
+      hosted: {
+        filename: 'slop_hammer_0_8b_v0_1.zip',
+        lfsOid: 'abcd1234',
+        url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+      },
+    }
+    expect(parseSentinel(JSON.stringify(original))).toEqual(original)
   })
 
   it('returns null for garbage input', () => {

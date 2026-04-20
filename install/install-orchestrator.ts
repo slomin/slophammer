@@ -1,6 +1,6 @@
 import { validateContract, type SlopHammerContract } from '@/llm/contract'
 import { assertRequiredFiles, isKnownModelFile } from './file-recognition'
-import { buildSentinel } from './sentinel'
+import { buildSentinel, type HostedSentinelMeta } from './sentinel'
 
 export interface ZipEntry {
   name: string
@@ -39,6 +39,7 @@ export interface RunInstallArgs {
   opfs: OpfsAdapterLike
   marks: StorageMarkerLike
   onProgress: (p: InstallProgress) => void
+  hostedMeta?: HostedSentinelMeta
 }
 
 export async function runInstall(args: RunInstallArgs): Promise<SlopHammerContract> {
@@ -74,7 +75,7 @@ export async function runInstall(args: RunInstallArgs): Promise<SlopHammerContra
   validateContract(contract)
 
   const checkpointId = contract.version ?? contract.base_model ?? contractFile
-  const sentinel = buildSentinel({ checkpointId, contractFile })
+  const sentinel = buildSentinel({ checkpointId, contractFile, hosted: args.hostedMeta })
   await opfs.writeSentinel(JSON.stringify(sentinel))
 
   await marks.setInstalled(checkpointId)

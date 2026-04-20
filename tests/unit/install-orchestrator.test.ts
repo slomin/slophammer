@@ -125,6 +125,43 @@ describe('runInstall — happy path', () => {
     expect(files.has('README.md')).toBe(true)
   })
 
+  it('records hosted metadata in the sentinel when provided', async () => {
+    const { opfs, getSentinel } = makeOpfs()
+    const marks = makeStorage()
+    await runInstall({
+      reader: makeZip(requiredHappyEntries),
+      opfs,
+      marks,
+      onProgress: () => {},
+      hostedMeta: {
+        filename: 'slop_hammer_0_8b_v0_1.zip',
+        lfsOid: 'abc123',
+        url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+      },
+    })
+    const parsed = JSON.parse(getSentinel()!)
+    expect(parsed.source).toBe('hosted')
+    expect(parsed.hosted).toEqual({
+      filename: 'slop_hammer_0_8b_v0_1.zip',
+      lfsOid: 'abc123',
+      url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+    })
+  })
+
+  it('writes a manual-source sentinel when hostedMeta is not supplied', async () => {
+    const { opfs, getSentinel } = makeOpfs()
+    const marks = makeStorage()
+    await runInstall({
+      reader: makeZip(requiredHappyEntries),
+      opfs,
+      marks,
+      onProgress: () => {},
+    })
+    const parsed = JSON.parse(getSentinel()!)
+    expect(parsed.source).toBe('manual')
+    expect(parsed.hosted).toBeUndefined()
+  })
+
   it('uses the alternate contract filename when present', async () => {
     const { opfs, files, getSentinel } = makeOpfs()
     const marks = makeStorage()

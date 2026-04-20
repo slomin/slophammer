@@ -137,6 +137,26 @@
         background: var(--ok); flex: 0 0 auto;
       }
       .install-card .meta .dot-sep { color: var(--muted); opacity: .6; }
+      .install-card .update-row {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        margin-top: 10px; padding-top: 10px;
+        border-top: 1px dashed var(--line-2);
+      }
+      .install-card .update-note {
+        font-size: 11px; color: var(--muted);
+        letter-spacing: 0.02em;
+      }
+      .install-card .update-note.error { color: var(--danger); }
+      .install-card .update-chip {
+        display: inline-flex; align-items: center;
+        padding: 3px 8px;
+        background: color-mix(in oklch, var(--accent) 12%, var(--panel));
+        border: 1px solid color-mix(in oklch, var(--accent) 40%, var(--line));
+        border-radius: 3px;
+        font-size: 11px;
+        color: var(--accent-ink);
+        font-variant-numeric: tabular-nums;
+      }
 
       /* buttons */
       .btn {
@@ -162,6 +182,10 @@
         color: #fff; background: var(--accent); border-color: var(--accent);
       }
       .btn.primary:hover { filter: brightness(1.05); background: var(--accent); }
+      .btn.subtle { border-color: transparent; color: var(--muted); padding: 8px 10px; }
+      .btn.subtle:hover { color: var(--fg); background: var(--bg-2); border-color: var(--line); }
+      .btn.compact { padding: 4px 10px; font-size: 10px; }
+      .btn:disabled { opacity: .5; cursor: default; }
 
       /* drop zone */
       .drop-zone {
@@ -180,6 +204,10 @@
       .drop-zone code {
         background: var(--bg-2); border: 1px solid var(--line);
         padding: 1px 5px; border-radius: 3px;
+      }
+      .drop-zone .dz-actions {
+        display: flex; align-items: center; justify-content: center;
+        gap: 10px; flex-wrap: wrap;
       }
 
       /* installing */
@@ -230,6 +258,8 @@
       }
       .error-card .em { font-size: 12px; color: var(--fg-2); }
       .error-card .btn.danger { padding: 4px 10px; font-size: 10px; }
+      .error-card .err-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .error-card .err-actions .btn { padding: 4px 10px; font-size: 10px; }
 
       /* settings */
       .settings-section-title {
