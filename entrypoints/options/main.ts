@@ -21,6 +21,11 @@ const log = createLogger('options')
 
 const root = document.getElementById('install')!
 const settingsRoot = document.getElementById('settings')!
+const versionEl = document.querySelector<HTMLElement>('[data-testid="page-version"]')
+if (versionEl) {
+  const v = browser.runtime.getManifest().version
+  versionEl.textContent = `v${v}`
+}
 const settingsStore = createChromeSettingsStore()
 const systemDarkMql = window.matchMedia('(prefers-color-scheme: dark)')
 let currentSettings: Settings | null = null

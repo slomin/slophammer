@@ -37,6 +37,7 @@ export function renderInstall(root: HTMLElement, state: InstallState, handlers: 
 
 function paragraph(text: string): HTMLElement {
   const p = document.createElement('p')
+  p.className = 'muted'
   p.textContent = text
   return p
 }
@@ -46,10 +47,9 @@ function buildDropZone(handlers: InstallHandlers): HTMLElement {
   wrap.className = 'drop-zone'
   wrap.dataset.testid = 'drop-zone'
   wrap.innerHTML = `
-    <h2>Drop your model zip here</h2>
-    <p class="muted">Expected: a zip produced by the Slop Hammer training pipeline (≈2.7 GB).
-    The contents decompress into this browser's private storage (OPFS).</p>
-    <button class="btn" type="button" data-testid="pick-button">Choose file…</button>
+    <div class="dz-title">Install the Slop Hammer model</div>
+    <div class="dz-sub">Drop the <code>.zip</code> bundle here, or browse to pick it.</div>
+    <button class="btn primary" type="button" data-testid="pick-button">Choose .zip…</button>
     <input type="file" accept=".zip" hidden data-testid="file-input" />
   `
   const input = wrap.querySelector<HTMLInputElement>('[data-testid="file-input"]')!
@@ -85,16 +85,16 @@ function buildInstallingCard(
   total: number,
 ): HTMLElement {
   const wrap = document.createElement('div')
-  wrap.className = 'card'
+  wrap.className = 'installing-card'
   wrap.dataset.testid = 'installing-card'
   wrap.innerHTML = `
-    <h2>Installing model…</h2>
-    <p class="muted" data-testid="install-subline">
-      ${completed}/${total} files · ${currentFile ? `writing <code>${escapeHtml(currentFile)}</code>` : 'decompressing'}
-    </p>
-    <div class="progress-bar"><div data-testid="progress-fill" style="width:${progress.toFixed(1)}%"></div></div>
-    <p class="muted" data-testid="progress-text">${progress.toFixed(1)}%</p>
-    <p class="hint">This takes ~1–3 minutes on a fast disk. Don't close this tab.</p>
+    <div class="row1">
+      <div class="title">Installing model…</div>
+      <div class="pct" data-testid="progress-text">${progress.toFixed(0)}%</div>
+    </div>
+    <div class="progress"><div data-testid="progress-fill" style="width:${progress.toFixed(1)}%"></div></div>
+    <div class="cur-file" data-testid="current-file">${currentFile ? escapeHtml(currentFile) : 'decompressing…'}</div>
+    <div class="count" data-testid="install-count">${completed} / ${total} files</div>
   `
   return wrap
 }
@@ -105,16 +105,20 @@ function buildInstalledCard(
   handlers: InstallHandlers,
 ): HTMLElement {
   const wrap = document.createElement('div')
-  wrap.className = 'card installed'
+  wrap.className = 'install-card'
   wrap.dataset.testid = 'installed-card'
   const when = new Date(installedAt).toLocaleString()
   wrap.innerHTML = `
-    <div class="check" aria-hidden="true">✓</div>
+    <span class="status" aria-label="installed">✓</span>
     <div class="info">
-      <h2>Model installed</h2>
-      <p class="muted" data-testid="checkpoint"><code>${escapeHtml(checkpointId)}</code> · ${escapeHtml(when)}</p>
+      <div class="title">Model installed</div>
+      <div class="meta">
+        <span class="model-chip" data-testid="checkpoint" title="${escapeHtml(checkpointId)}">${escapeHtml(checkpointId)}</span>
+        <span class="dot-sep">·</span>
+        <span>${escapeHtml(when)}</span>
+      </div>
     </div>
-    <button class="btn danger" type="button" data-testid="reinstall">Re-install</button>
+    <button class="btn danger" type="button" data-testid="reinstall">↻ Re-install</button>
   `
   const button = wrap.querySelector<HTMLButtonElement>('[data-testid="reinstall"]')!
   button.addEventListener('click', () => {
@@ -127,12 +131,14 @@ function buildInstalledCard(
 
 function buildErrorCard(message: string, handlers: InstallHandlers): HTMLElement {
   const wrap = document.createElement('div')
-  wrap.className = 'card error'
+  wrap.className = 'error-card'
   wrap.dataset.testid = 'error-card'
   wrap.innerHTML = `
-    <h2>Install failed</h2>
-    <p data-testid="error-message">${escapeHtml(message)}</p>
-    <button class="btn" type="button" data-testid="retry">Try again</button>
+    <div class="eh">
+      <div class="et">Install failed</div>
+      <button class="btn danger" type="button" data-testid="retry">↻ Retry</button>
+    </div>
+    <div class="em" data-testid="error-message">${escapeHtml(message)}</div>
   `
   const button = wrap.querySelector<HTMLButtonElement>('[data-testid="retry"]')!
   button.addEventListener('click', () => handlers.onRetry())
