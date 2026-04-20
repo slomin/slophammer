@@ -1,6 +1,7 @@
 import { CARD_STYLES } from './styles'
 
-export const CARD_TAG = 'slop-hammer-card'
+export const CARD_HOST_ATTR = 'data-slop-hammer-card'
+export const CARD_HOST_SELECTOR = `[${CARD_HOST_ATTR}]`
 
 export interface RawBreakdownRefs {
   human: HTMLElement
@@ -30,6 +31,13 @@ export interface CardElements {
   refs: CardRefs
 }
 
+function applyHostReset(host: HTMLElement): void {
+  host.setAttribute(CARD_HOST_ATTR, '')
+  host.style.setProperty('all', 'initial', 'important')
+  host.style.setProperty('visibility', 'visible', 'important')
+  host.style.setProperty('display', 'block', 'important')
+}
+
 function el<T extends HTMLElement>(tag: string, testId?: string, attrs?: Record<string, string>): T {
   const node = document.createElement(tag) as T
   if (testId) node.dataset.testid = testId
@@ -52,7 +60,8 @@ function rawRow(testId: string, label: string): { root: HTMLElement; value: HTML
 }
 
 export function buildCard(): CardElements {
-  const host = document.createElement(CARD_TAG)
+  const host = document.createElement('div')
+  applyHostReset(host)
   const shadow = host.attachShadow({ mode: 'open' })
 
   const style = document.createElement('style')

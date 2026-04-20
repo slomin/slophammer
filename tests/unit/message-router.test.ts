@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createMessageDispatcher, type HandlerMap } from '@/background/message-router'
+import {
+  createMessageDispatcher,
+  forwardToTab,
+  type HandlerMap,
+  type MessageRouterLogger,
+} from '@/background/message-router'
 import type { ClassifyResult } from '@/llm/classify-result'
 import type { ExtensionMessage } from '@/messaging/protocol'
 
@@ -73,5 +78,55 @@ describe('createMessageDispatcher', () => {
     })
     await dispatch({ type: 'model:load' })
     expect(resolved).toBe(true)
+  })
+})
+
+type LoggerCall = (msg: string, data?: unknown) => void
+function stubLogger() {
+  const logger: MessageRouterLogger = {
+    debug: vi.fn<LoggerCall>(),
+    info: vi.fn<LoggerCall>(),
+    warn: vi.fn<LoggerCall>(),
+    error: vi.fn<LoggerCall>(),
+  }
+  return logger
+}
+
+describe('forwardToTab', () => {
+  const msg: ExtensionMessage = {
+    type: 'classify:result',
+    requestId: 'r1',
+    tabId: 42,
+    result: sampleResult,
+  }
+
+  it('returns void synchronously (fire-and-forget)', () => {
+    const logger = stubLogger()
+    const sendMessage = vi.fn(() => new Promise(() => {})) // never resolves
+    const out = forwardToTab(sendMessage, logger, 42, msg)
+    expect(out).toBeUndefined()
+    expect(sendMessage).toHaveBeenCalledWith(42, msg)
+  })
+
+  it('silently swallows sendMessage rejection (broadcast-safe)', async () => {
+    const logger = stubLogger()
+    const sendMessage = vi.fn(() =>
+      Promise.reject(new Error('Could not establish connection')),
+    )
+    forwardToTab(sendMessage, logger, 42, msg)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+
+  it('does not log when sendMessage resolves', async () => {
+    const logger = stubLogger()
+    const sendMessage = vi.fn(() => Promise.resolve(undefined))
+    forwardToTab(sendMessage, logger, 42, msg)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.info).not.toHaveBeenCalled()
   })
 })

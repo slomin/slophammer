@@ -1,11 +1,10 @@
 export const CARD_STYLES = `
   :host {
-    position: fixed;
-    z-index: 2147483647;
-    font-family: ui-monospace, Menlo, monospace;
-    color-scheme: dark;
+    all: initial;
   }
   [data-testid="card-root"] {
+    position: fixed;
+    z-index: 2147483647;
     width: 320px;
     background: #0f0f11;
     color: #e8e8ea;
@@ -15,6 +14,8 @@ export const CARD_STYLES = `
     padding: 12px;
     font-size: 13px;
     line-height: 1.4;
+    font-family: ui-monospace, Menlo, monospace;
+    color-scheme: dark;
   }
   [data-testid="card-root"][data-state="idle"] { display: none; }
   .row { display: flex; gap: 8px; align-items: baseline; }

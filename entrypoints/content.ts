@@ -53,10 +53,10 @@ export default defineContentScript({
       const p = computeCardPosition({
         selection: toSelectionRect(lastRect),
         viewport: currentViewport(),
-        card: { width: c.host.offsetWidth || 320, height: c.host.offsetHeight || 180 },
+        card: { width: c.refs.root.offsetWidth || 320, height: c.refs.root.offsetHeight || 180 },
       })
-      c.host.style.top = `${p.top}px`
-      c.host.style.left = `${p.left}px`
+      c.refs.root.style.top = `${p.top}px`
+      c.refs.root.style.left = `${p.left}px`
     }
 
     function applyAction(action: Parameters<typeof reduceCardState>[1]) {

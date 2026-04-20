@@ -1,6 +1,9 @@
 import http from 'node:http'
 
 const PORT = 8765
+const HOSTILE_CSS = `
+    :not(:defined) { visibility: hidden; }
+`
 
 const SAMPLES = [
   {
@@ -27,11 +30,23 @@ i have one question nobody in that meeting could answer. how does it actually wo
   },
 ]
 
-const html = `<!doctype html>
+function escapeHtml(text) {
+  return text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+}
+
+function renderPage({ hostile = false } = {}) {
+  const title = hostile
+    ? 'Slop Hammer — hostile test fixtures'
+    : 'Slop Hammer — test fixtures'
+  const intro = hostile
+    ? 'This route simulates site CSS that hides undefined custom elements.'
+    : 'Select a paragraph below.'
+
+  return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Slop Hammer — test fixtures</title>
+  <title>${title}</title>
   <style>
     html, body { margin: 0; padding: 0; background: #0f0f11; color: #e8e8ea; font-family: ui-monospace, Menlo, monospace; }
     body { padding: 32px; max-width: 780px; line-height: 1.6; }
@@ -40,28 +55,39 @@ const html = `<!doctype html>
     section h2 { font-size: 13px; color: #a5ffa5; margin: 0 0 10px; letter-spacing: 0.03em; }
     p { white-space: pre-wrap; font-family: Georgia, serif; font-size: 15px; color: #d8d8da; margin: 0; }
     .hint { color: #8a8a90; font-size: 12px; margin-top: 10px; font-family: ui-monospace, Menlo, monospace; }
+${hostile ? HOSTILE_CSS : ''}
   </style>
 </head>
 <body>
-  <h1>Slop Hammer — test fixtures</h1>
+  <h1>${title}</h1>
   <p style="font-family:ui-monospace; color:#8a8a90; font-size:13px">
-    Select a paragraph below, right-click, and pick <b>Check with Slop Hammer</b>.
+    ${intro} Right-click a 75+ character selection and pick <b>Check with Slop Hammer</b>.
   </p>
   ${SAMPLES.map(
     (s, i) => `
   <section>
     <h2>${i + 1}. ${s.label}</h2>
-    <p>${s.text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])}</p>
+    <p>${escapeHtml(s.text)}</p>
     <div class="hint">${s.text.length} chars · ${s.text.trim().split(/\s+/).length} words</div>
   </section>`,
   ).join('')}
 </body>
 </html>`
+}
 
-const server = http.createServer((_, res) => {
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`)
+  if (url.pathname !== '/' && url.pathname !== '/hostile') {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Not found')
+    return
+  }
+
+  const html = renderPage({ hostile: url.pathname === '/hostile' })
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
   res.end(html)
 })
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`test page: http://127.0.0.1:${PORT}/`)
+  console.log(`hostile page: http://127.0.0.1:${PORT}/hostile`)
 })

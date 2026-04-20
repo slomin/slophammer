@@ -19,7 +19,25 @@ export function createMessageDispatcher(handlers: HandlerMap): MessageDispatcher
 export interface MessageRouterLogger {
   debug(msg: string, data?: unknown): void
   info(msg: string, data?: unknown): void
+  warn(msg: string, data?: unknown): void
   error(msg: string, data?: unknown): void
+}
+
+// Fire-and-forget a message to a tab from an SW onMessage handler. Awaiting
+// chrome.tabs.sendMessage inside the handler races the SW idle window in
+// stable Chrome and can drop the outbound send — reference implementation
+// in references/ uses the same fire-and-forget pattern.
+export function forwardToTab(
+  sendMessage: (tabId: number, msg: ExtensionMessage) => Promise<unknown>,
+  logger: MessageRouterLogger,
+  tabId: number,
+  msg: ExtensionMessage,
+): void {
+  sendMessage(tabId, msg).catch(() => {
+    // Silent — broadcasts (e.g. model:status) target every tab, most of which
+    // don't have our content script. Logging each failure floods the inspector.
+    // Matches references/background/message-router.ts.
+  })
 }
 
 export interface AttachOptions {

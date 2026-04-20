@@ -29,11 +29,18 @@ describe('buildCard', () => {
     document.body.innerHTML = ''
   })
 
-  it('creates a host element with a shadow root', () => {
+  it('creates a hardened host element with a shadow root', () => {
     const card = buildCard()
     expect(card.host).toBeInstanceOf(HTMLElement)
     expect(card.shadow).toBeTruthy()
-    expect(card.host.tagName.toLowerCase()).toBe('slop-hammer-card')
+    expect(card.host.tagName.toLowerCase()).toBe('div')
+    expect(card.host.getAttribute('data-slop-hammer-card')).toBe('')
+    expect(card.host.style.getPropertyValue('all')).toBe('initial')
+    expect(card.host.style.getPropertyPriority('all')).toBe('important')
+    expect(card.host.style.getPropertyValue('visibility')).toBe('visible')
+    expect(card.host.style.getPropertyPriority('visibility')).toBe('important')
+    expect(card.host.style.getPropertyValue('display')).toBe('block')
+    expect(card.host.style.getPropertyPriority('display')).toBe('important')
   })
 
   it('starts with the root data-state = "idle"', () => {

@@ -5,6 +5,7 @@ import {
 import {
   attachRuntimeRouter,
   createMessageDispatcher,
+  forwardToTab,
   type HandlerMap,
 } from '@/background/message-router'
 import { ensureOffscreenDocument } from '@/background/offscreen-manager'
@@ -40,31 +41,29 @@ export default defineBackground(() => {
     newRequestId: () => crypto.randomUUID(),
   })
 
+  const sendTab = (tabId: number, msg: ClassifyResultMessage | ClassifyErrorMessage | ModelStatusMessage) =>
+    forwardToTab((id, m) => chrome.tabs.sendMessage(id, m), log, tabId, msg)
+
   const handlers: HandlerMap = {
     'classify:result': async (msg: ClassifyResultMessage) => {
       log.info('router: classify:result → tab', { requestId: msg.requestId, tabId: msg.tabId })
-      // Await so the service worker stays alive until the tab actually receives it.
-      await chrome.tabs.sendMessage(msg.tabId, msg).catch((err) =>
-        log.warn('tabs.sendMessage(classify:result) failed', String(err)),
-      )
+      sendTab(msg.tabId, msg)
     },
     'classify:error': async (msg: ClassifyErrorMessage) => {
       log.warn('router: classify:error → tab', { requestId: msg.requestId, error: msg.error })
-      await chrome.tabs.sendMessage(msg.tabId, msg).catch((err) =>
-        log.warn('tabs.sendMessage(classify:error) failed', String(err)),
-      )
+      sendTab(msg.tabId, msg)
     },
     'model:status': async (msg: ModelStatusMessage) => {
       log.debug('router: model:status → broadcast', { status: msg.status })
       const tabs = await chrome.tabs.query({})
-      await Promise.all(
-        tabs.flatMap((t) => (t.id != null ? [chrome.tabs.sendMessage(t.id, msg).catch(() => {})] : [])),
-      )
+      for (const t of tabs) {
+        if (t.id != null) sendTab(t.id, msg)
+      }
     },
     'model:installed': async () => {
       log.info('router: model:installed → ensuring offscreen and triggering load')
       await ensureOffscreenDocument()
-      await chrome.runtime.sendMessage({ type: 'model:load' }).catch(() => {})
+      chrome.runtime.sendMessage({ type: 'model:load' }).catch(() => {})
     },
   }
 

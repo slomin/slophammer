@@ -17,9 +17,9 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 
 | Command | What it does |
 |---|---|
-| `pnpm chrome` | Launch Chrome for Testing with the extension loaded + CDP on `:9222`. Disposable profile created by the launch script. |
+| `pnpm chrome` | Launch Chrome for Testing with the extension loaded + CDP on `:9222`, using the reusable profile at `~/.slophammer-chrome-profile`. |
 | `pnpm chrome:real` | Same but with the daily Google Chrome binary on `:9223`. Note the restrictions in the "Stable Chrome" section below. |
-| `pnpm test-page` | Start an http server on `:8765` serving fixtures (paragraphs to right-click on). |
+| `pnpm test-page` | Start an http server on `:8765` serving fixtures at `/` and a hostile-CSS repro page at `/hostile`. |
 | `pnpm build` | Production WXT build → `.output/chrome-mv3/`. |
 | `pnpm release` | `pnpm build` + refresh `references/releases/current/{unpacked, *.zip, README.txt}`. Releases go into a single folder that overwrites on each run. |
 | `pnpm reload` | `pnpm release` + kill CfT + relaunch. Reliable SW refresh. |
@@ -36,17 +36,31 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 4. Inspect via `chrome-extension://<id>/inspector.html` — all logs from every context
    route through there.
 5. For agent-driven debugging: talk to CfT via raw CDP (see "Things to not trust" below).
+6. Manual smoke on fresh tabs:
+   - `http://127.0.0.1:8765/`
+   - `http://127.0.0.1:8765/hostile`
+   - a real site such as Reddit when validating cross-site CSS resilience
 
 ## MV3 gotchas (read before changing anything messaging-related)
 
-- **SW onMessage must use native `chrome.runtime.onMessage.addListener`**, not WXT's
-  `browser.runtime.onMessage.addListener`. The polyfill wrapper silently fails to fire
-  on MV3 service workers in this project's setup.
-- **Async message handlers:** `return true` from the listener and call `sendResponse()`
-  inside a `.finally()` after the async work settles. Without that, Chrome may terminate
-  the SW before the handler finishes.
-- **Await `chrome.tabs.sendMessage`** inside a router handler — fire-and-forget can
-  drop the message if the SW idles immediately after the synchronous return.
+- **`browser === chrome` in WXT ≥0.20.** `@wxt-dev/browser` exports
+  `globalThis.browser ?? globalThis.chrome`; in Chrome that's just
+  `globalThis.chrome`. There is no polyfill wrapper. Swapping `browser.runtime.*`
+  ↔ `chrome.runtime.*` is behaviourally a no-op. (Earlier commit messages
+  blaming a "polyfill wrapper" for fire-miss were misdiagnosed — the real fix
+  was the async-semantics change described below.)
+- **Async message handlers:** `return true` from the listener and call
+  `sendResponse()` inside a `.finally()` after the async work settles. Without
+  that, Chrome may terminate the SW before the handler finishes.
+- **Do NOT `await chrome.tabs.sendMessage` inside a SW onMessage handler.**
+  Once the handler's async work resolves and `sendResponse` fires, Chrome can
+  idle the SW before the outbound tab send has actually been flushed, and
+  silently drop it — observed in stable Chrome (not in CfT, which is more
+  lenient about SW lifetime). **Fire-and-forget instead**:
+  `chrome.tabs.sendMessage(tabId, msg).catch(logger.warn)`. Use the
+  `forwardToTab` helper in `background/message-router.ts`. The reference
+  implementation in `references/` does the same and works end-to-end in stable
+  Chrome.
 - **Filter `type === 'LOG'` at the top of the router.** Otherwise logger output routes
   back through the SW and the console floods with `router: received {type:"LOG"}` per
   emitted log line.
@@ -79,6 +93,11 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
   reproduce in CfT but the user sees it in their daily Chrome, suspect their
   profile's saved extension state (disabled bit, cached pre-fix SW, previously-orphaned
   content script on open tabs).
+- Daily Chrome-specific gotchas that bit us:
+  - existing tabs can keep the old or missing content script after install/reload; use
+    a fresh tab or reload the page before trusting a result
+  - check the extension's **Site access** in `chrome://extensions` if it appears loaded
+    but does not auto-run on a page
 
 ## Messaging mental model
 
@@ -108,14 +127,13 @@ context-menu click
   current location. Always `Runtime.evaluate` `location.href` in the tab to confirm.
 - `pnpm test:e2e` passing alone — the E2E uses a programmatic `classify:run` dispatch
   because Playwright can't click native context menus. Manual smoke via the
-  context-menu is still required before a release.
+  context-menu is still required before a release, including the hostile local page.
 
 ## Profile + model
 
-- CfT profile lives at a disposable path created by `scripts/launch-chrome.sh` — when
-  a test gets stuck in weird extension-state (disabled bit, cached SW, etc.), the
-  cleanest recovery is to delete that directory and rerun `pnpm chrome`. Model will
-  need reinstalling.
+- CfT uses the fixed profile directory `~/.slophammer-chrome-profile`. When a test gets
+  stuck in weird extension-state (disabled bit, cached SW, etc.), the cleanest recovery
+  is to delete that directory and rerun `pnpm chrome`. Model will need reinstalling.
 - Model is persisted in OPFS under `slop-hammer/model/*`. Sentinel JSON at
   `slop-hammer/.ready`. The installer (`install/install-orchestrator.ts`) writes both.
 - **Test classifier zip** is in `references/` (which is gitignored). It must ship the
@@ -126,14 +144,23 @@ context-menu click
 - Extension ID is stable per (profile, `--load-extension` path) combo. Currently
   `elalpednccdbgjklegipphhapojalphi` in the CfT profile.
 
-## Known open issue
+## Retros — bugs we already hit (so we don't rediscover)
 
-- In **stable Chrome** (not CfT) the card reaches `loading` on a real context-menu
-  click but never transitions to `ready`, even though the SW router logs
-  `classify:result → tab`. First thing to try: swap
-  `entrypoints/content.ts`'s `browser.runtime.onMessage.addListener` for native
-  `chrome.runtime.onMessage.addListener` — the SW had the same fire-miss
-  bug in the polyfill wrapper and this might be the content-script version.
+- **Stable Chrome: card stuck in `loading`.** The SW's `classify:result`
+  handler was `await`ing `chrome.tabs.sendMessage(tabId, msg)` inside the
+  onMessage listener. Once the async work resolved and `sendResponse` fired,
+  Chrome idled the SW and cancelled the outbound send before it reached the
+  tab. CfT kept the SW alive long enough for the send to flush, which is
+  why it reproduced only in stable Chrome. Fix: fire-and-forget the tab
+  send (`forwardToTab` helper). Reference implementation in `references/`
+  uses the same pattern.
+- **Reddit: card existed in DOM but was invisible.** The old content-card host was an
+  undefined custom element (`<slop-hammer-card>`). Reddit ships global
+  `:not(:defined) { visibility: hidden; }`, so the host inherited `visibility: hidden`
+  and hid the whole overlay even though messaging, state, and geometry were correct.
+  Fix: mount the card on a plain `div[data-slop-hammer-card]` host with inline
+  `all/visibility/display` resets before attaching the shadow root. Wykop did not
+  reproduce this because it doesn't hide undefined custom elements.
 
 ## File layout
 

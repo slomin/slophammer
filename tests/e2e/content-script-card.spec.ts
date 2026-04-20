@@ -3,16 +3,16 @@ import { test, expect, gotoHtml } from './fixtures'
 const LONG_TEXT =
   'The quick brown fox jumps over the lazy dog. ' +
   'This pangram must exceed seventy-five characters to satisfy the minimum-selection rule.'
+const CARD_HOST_SELECTOR = '[data-slop-hammer-card]'
+const HOSTILE_PAGE_HEAD = '<style>:not(:defined) { visibility: hidden; }</style>'
 
-test('content script renders result card on classify dispatch', async ({ context }) => {
-  const page = await context.newPage()
-  await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`)
-  await page.waitForLoadState('domcontentloaded')
-
-  // Wait for the content script's log to confirm it injected.
+async function dispatchClassification(
+  context: import('@playwright/test').BrowserContext,
+  page: import('@playwright/test').Page,
+  text: string,
+) {
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
 
-  // Locate the tab by URL so we don't depend on "active" flags.
   const tabId = await worker.evaluate(async (pageUrl) => {
     for (let i = 0; i < 20; i++) {
       const tabs = await chrome.tabs.query({ url: pageUrl + '*' })
@@ -23,9 +23,6 @@ test('content script renders result card on classify dispatch', async ({ context
   }, page.url().split('?')[0])
   expect(tabId, 'SW could not find the test page tab').toBeGreaterThan(0)
 
-  // Ensure the offscreen document exists before dispatching — its creation is
-  // async and racy against a fresh profile launch. The content script is also
-  // only registered after navigation completes, so classify:started is retried.
   const requestId = 'e2e-' + Date.now()
   await worker.evaluate(
     async ([tabId, requestId, text]) => {
@@ -51,8 +48,6 @@ test('content script renders result card on classify dispatch', async ({ context
         }
       }
 
-      // classify:run goes to the offscreen doc (runtime broadcast). Retry in
-      // case offscreen is still booting.
       for (let i = 0; i < 50; i++) {
         try {
           await chrome.runtime.sendMessage({
@@ -67,10 +62,18 @@ test('content script renders result card on classify dispatch', async ({ context
         }
       }
     },
-    [tabId, requestId, LONG_TEXT],
+    [tabId, requestId, text],
   )
 
-  const card = page.locator('slop-hammer-card')
+  return page.locator(CARD_HOST_SELECTOR)
+}
+
+test('content script renders result card on classify dispatch', async ({ context }) => {
+  const page = await context.newPage()
+  await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`)
+  await page.waitForLoadState('domcontentloaded')
+
+  const card = await dispatchClassification(context, page, LONG_TEXT)
   await expect(card).toBeAttached({ timeout: 4000 })
 
   await expect
@@ -101,4 +104,32 @@ test('content script renders result card on classify dispatch', async ({ context
   const buckets = [snapshot.aiPct, snapshot.mixedPct, snapshot.humanPct]
   expect(buckets.filter((b) => b === '100')).toHaveLength(1)
   expect(buckets.filter((b) => b === '0')).toHaveLength(2)
+})
+
+test('content script remains visible when the page hides undefined custom elements', async ({ context }) => {
+  const page = await context.newPage()
+  await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`, '/hostile.html', { head: HOSTILE_PAGE_HEAD })
+  await page.waitForLoadState('domcontentloaded')
+
+  const card = await dispatchClassification(context, page, LONG_TEXT)
+  await expect(card).toBeAttached({ timeout: 4000 })
+
+  await expect
+    .poll(
+      async () =>
+        card.evaluate((el) => {
+          const root = el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')
+          return {
+            state: root?.dataset.state ?? null,
+            hostVisibility: getComputedStyle(el).visibility,
+            rootVisibility: root ? getComputedStyle(root).visibility : null,
+          }
+        }),
+      { timeout: 4000 },
+    )
+    .toEqual({
+      state: 'ready',
+      hostVisibility: 'visible',
+      rootVisibility: 'visible',
+    })
 })
