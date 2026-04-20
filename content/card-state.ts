@@ -90,18 +90,23 @@ export function renderState(card: CardElements, state: CardState): void {
 function renderReady(card: CardElements, result: ClassifyResult): void {
   const { refs } = card
   const binary = computeBinary(result.rawPct)
-  const descriptor = verdictDescriptor(binary.winPct, binary.winner)
+  // Round once and reuse, so the chip, label, hero %, bar widths and legend
+  // all agree about which side of the 65 / 85 thresholds we're on and never
+  // add up to 99% or 101% at half-percent boundaries.
+  const winPctRounded = Math.round(binary.winPct)
+  const loserRounded = 100 - winPctRounded
+  const descriptor = verdictDescriptor(winPctRounded, binary.winner)
 
   refs.verdictBox.dataset.verdict = descriptor.side
   refs.verdictLabel.textContent = descriptor.label
   refs.verdictConfidence.textContent = descriptor.confidenceText
-  refs.verdictBig.textContent = String(Math.round(binary.winPct))
+  refs.verdictBig.textContent = String(winPctRounded)
   refs.verdictText.textContent = descriptor.sentence
 
-  const humanRounded = Math.round(binary.humanBinary)
-  const aiRounded = Math.round(binary.aiBinary)
-  setPct(refs.binaryBarHuman, binary.humanBinary)
-  setPct(refs.binaryBarAi, binary.aiBinary)
+  const humanRounded = binary.winner === 'human' ? winPctRounded : loserRounded
+  const aiRounded = binary.winner === 'ai' ? winPctRounded : loserRounded
+  setPct(refs.binaryBarHuman, humanRounded)
+  setPct(refs.binaryBarAi, aiRounded)
   refs.binaryLegendHuman.textContent = `HUMAN ${humanRounded}%`
   refs.binaryLegendAi.textContent = `${aiRounded}% AI`
 

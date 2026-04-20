@@ -271,6 +271,37 @@ describe('renderState — idle', () => {
   })
 })
 
+describe('threshold + sum invariants', () => {
+  it('HIGH CONFIDENCE when the displayed hero percent rounds to 85', () => {
+    // rawPct summing to 100 with aiBinary = 84.5:
+    //   ai-side = moderately + heavily + 0.5*lightly = 44 + 40 + 0.5 = 84.5
+    //   human-side = human + 0.5*lightly = 15 + 0.5 = 15.5
+    const boundary: ClassifyResult = { ...aiResult, rawPct: [15, 1, 44, 40] }
+    const card = buildCard()
+    renderState(card, {
+      kind: 'ready', requestId: 'r', preview: 'x', wordCount: 1, result: boundary,
+    })
+    expect(testId(card.shadow, 'verdict-big')?.textContent).toBe('85')
+    expect(testId(card.shadow, 'verdict-confidence')?.textContent).toBe('HIGH CONFIDENCE')
+    expect(testId(card.shadow, 'verdict-label')?.textContent).toBe('AI')
+  })
+
+  it('binary legend and bars always sum to 100', () => {
+    // humanResult rawPct=[92,5,2,1] → humanBinary=94.5, aiBinary=5.5
+    const card = buildCard()
+    renderState(card, {
+      kind: 'ready', requestId: 'r', preview: 'x', wordCount: 1, result: humanResult,
+    })
+    const human = Number(testId(card.shadow, 'binary-bar-human')!.dataset.pct)
+    const ai = Number(testId(card.shadow, 'binary-bar-ai')!.dataset.pct)
+    expect(human + ai).toBe(100)
+    expect(testId(card.shadow, 'binary-legend-human')?.textContent).toContain(`${human}%`)
+    expect(testId(card.shadow, 'binary-legend-ai')?.textContent).toContain(`${ai}%`)
+    // winner's legend pct matches the hero big number
+    expect(testId(card.shadow, 'verdict-big')?.textContent).toBe(String(human))
+  })
+})
+
 describe('view flag (minimised)', () => {
   it('preserves an externally-set data-view across re-renders', () => {
     const card = buildCard()

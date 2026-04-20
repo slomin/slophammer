@@ -68,6 +68,16 @@ export default defineContentScript({
         c.refs.root.dataset.mode = pressed ? 'basic' : 'advanced'
       })
 
+      // Re-clamp the card to the viewport whenever its size changes, so that
+      // opening the advanced drawer (or restoring from minimised) near the
+      // bottom of the page doesn't push the lower rows off-screen.
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+          if (state.kind !== 'idle') position(c)
+        })
+        ro.observe(c.refs.root)
+      }
+
       card = c
       return c
     }
