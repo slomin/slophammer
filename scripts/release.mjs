@@ -19,7 +19,7 @@ const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16)
 writeFileSync(
   resolve(RELEASE_DIR, 'README.txt'),
   `Slop Hammer — current release
-Built from feat/scaffolding ${sha} at ${stamp}
+Built from ${sha} at ${stamp}
 
 Load this in Chrome:
   1. chrome://extensions/
@@ -27,9 +27,9 @@ Load this in Chrome:
   3. If an older Slop Hammer is installed, REMOVE it first (not reload).
   4. Click "Load unpacked" and select the "unpacked/" folder in this directory.
 
-First-run: the options page opens automatically. Drop any classifier zip
-from ../../references/checkpoints-mine/ onto it. Then select ≥75 chars on
-any http/https page → right-click → Check with Slop Hammer.
+First-run: the options page opens automatically. Install the official model
+from Hugging Face, or use the manual .zip fallback if needed. Then select
+75+ chars on any http/https page → right-click → Check with Slop Hammer.
 
 Toolbar icon opens the options page.
 

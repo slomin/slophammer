@@ -125,8 +125,9 @@ Package-readiness notes:
 
 ## Draft dashboard copy
 
-These drafts are intentionally conservative and should be refined in the
-release-prep ticket before submission.
+The final paste sheet for the first submission is tracked in
+`docs/chrome-web-store-submission.md`. Keep that file aligned with dashboard
+answers before upload.
 
 ### Store listing
 
@@ -251,29 +252,29 @@ Remote-code declaration:
 > 8. In options, change Result detail between Basic and Advanced and Theme
 >    between System, Light, and Dark to verify those settings.
 
-## Blockers before submission
+## Current release-prep status
 
-Must fix or produce before first submission:
+Prepared in #16:
 
-- Privacy policy URL.
-- Support URL or support/contact destination.
-- Store screenshots, preferably at `1280x800` or `640x400`.
-- Small promo tile decision/asset (`440x280`) if the dashboard requires or
-  strongly nudges it for the chosen listing quality target.
-- Final store listing copy and category selection.
-- Final permission justifications pasted into the dashboard.
-- Confirm whether `scripting` is actually used. If not used, remove it before
-  submission to reduce review surface.
-- Confirm whether `<all_urls>` is the right v1 host-permission posture or
-  whether a narrower/on-click host model is feasible. If kept, justify it
-  carefully.
-- Create or publish privacy/support pages and replace placeholder footer links
-  in options if those links remain visible.
-- Fix stale release README text in `scripts/release.mjs`.
-- Version-release decision: either keep `0.0.1` for the first submitted build or
-  bump to the intended first store version before upload.
+- Privacy policy copy: `docs/privacy.md`.
+- Support copy: `docs/support.md`.
+- Dashboard paste sheet: `docs/chrome-web-store-submission.md`.
+- Store screenshots and promo tile: `store-assets/chrome-web-store/`.
+- Release version: `0.3.0`.
+- `scripting` permission removed after repo inspection showed no runtime use.
+- `<all_urls>` kept for v1 and justified in the dashboard paste sheet.
+- Options footer placeholder links replaced with planned public GitHub URLs.
+- `scripts/release.mjs` README text updated for the current hosted-model flow.
 
-Should consider before public release:
+Remaining before dashboard submission:
+
+- Make the repository public, or move the privacy/support Markdown to another
+  public destination and update the dashboard URLs.
+- Confirm the dashboard accepts the chosen screenshots and promo tile.
+- Run the final automated checks, release package generation, ZIP inspection,
+  and manual QA listed below.
+
+Should consider before public release after the first trusted-tester release:
 
 - A short disclaimer in listing and/or UI that classifier output is probabilistic
   and not proof of authorship.
@@ -328,68 +329,3 @@ Should consider before public release:
 
 Future automation via the Chrome Web Store API can wait until manual releases
 have happened at least once.
-
-## Proposed follow-up ticket
-
-Title:
-
-> chore(release): prepare first Chrome Web Store submission
-
-Labels:
-
-- `type:chore`
-- `area:docs`
-- `area:tooling`
-
-Summary:
-
-> Prepare Slop Hammer's first Chrome Web Store submission package and dashboard
-> materials, using the release-path spike as the source of truth.
-
-Scope:
-
-- Create the privacy policy and support/contact pages or URLs required for the
-  listing.
-- Replace or remove visible placeholder privacy/support links in the options
-  page.
-- Finalize store listing copy, category, language, and reviewer test
-  instructions.
-- Produce store screenshots and any required promo assets.
-- Finalize privacy/data-use answers and permission justifications.
-- Confirm whether `scripting` is needed; remove it if unused.
-- Decide whether to keep `<all_urls>` for v1; if kept, document and use the
-  final justification.
-- Fix stale `scripts/release.mjs` README content.
-- Decide and apply the first submitted version number.
-- Run `pnpm release` and verify the generated ZIP is upload-ready.
-- Leave a final submission checklist with the exact dashboard fields to paste.
-
-Acceptance criteria:
-
-- A production ZIP is generated and inspected with `manifest.json` at the ZIP
-  root.
-- Store listing copy is final enough to paste into the dashboard.
-- Privacy policy/support URLs are available and non-placeholder.
-- Privacy/data-use answers and permission justifications are final enough to
-  paste into the dashboard.
-- Required screenshots and promo assets exist.
-- The manifest contains only permissions we are willing to justify.
-- Release README/output instructions no longer mention stale branch names or old
-  manual-only model setup.
-- Automated checks and manual QA evidence are recorded.
-
-Evidence required:
-
-- Links to privacy/support pages.
-- Screenshot/promo asset paths.
-- Generated ZIP path and size.
-- Final permission-justification text.
-- Final privacy/data-use text.
-- Manual QA notes.
-
-Non-goals:
-
-- Paying the developer registration fee.
-- Submitting the item to Chrome Web Store.
-- Building Chrome Web Store API automation.
-- Reworking classifier behavior except where required for store readiness.
