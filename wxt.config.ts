@@ -35,7 +35,6 @@ export default defineConfig({
     permissions: [
       'contextMenus',
       'activeTab',
-      'scripting',
       'offscreen',
       'storage',
       'unlimitedStorage',
