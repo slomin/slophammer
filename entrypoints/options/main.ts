@@ -15,6 +15,7 @@ import {
   type PendingUpdate,
 } from '@/install/install-ui-state'
 import { ChromeStorageMarker, OpfsWriter, wipeModel } from '@/install/opfs-writer'
+import { NOT_A_ZIP_MESSAGE, isZipFilename } from '@/install/replace-request'
 import { parseSentinel, type HostedSentinelMeta, type SentinelPayload } from '@/install/sentinel'
 import { MODEL_ROOT_DIR, SENTINEL_NAME } from '@/llm/opfs-model-reader'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
@@ -68,7 +69,11 @@ const handlers = {
       log.error('hosted install crashed', err instanceof Error ? err.message : String(err))
     })
   },
-  onFile: (file: File) => installFromFile(file),
+  onFile: (file: File) => {
+    installFromFile(file).catch((err) => {
+      log.error('install crashed', err instanceof Error ? err.message : String(err))
+    })
+  },
   onWipe: async () => {
     await wipeModel()
     currentSentinel = null
@@ -86,6 +91,7 @@ const handlers = {
       log.error('update install crashed', err instanceof Error ? err.message : String(err))
     })
   },
+  onReplaceError: (message: string | null) => dispatch({ type: 'replace-error', message }),
 }
 
 async function readSentinelFile(): Promise<SentinelPayload | null> {
@@ -112,8 +118,8 @@ async function runPostInstall(sentinel: SentinelPayload) {
 }
 
 async function installFromFile(file: File) {
-  if (!file.name.toLowerCase().endsWith('.zip')) {
-    dispatch({ type: 'install-failed', message: 'Please pick a .zip file.' })
+  if (!isZipFilename(file.name)) {
+    dispatch({ type: 'install-failed', message: NOT_A_ZIP_MESSAGE })
     return
   }
   log.info('install start (manual)', { name: file.name, size: file.size })
@@ -148,13 +154,22 @@ async function installFromFile(file: File) {
 }
 
 async function installFromHosted(explicit?: PendingUpdate) {
+  // Everything up to runInstall is non-destructive: the installed model is
+  // still on disk and still loaded. Only report a failure as a lost install
+  // once resetModelDir() has actually run.
+  let destructive = false
+  const failed = (message: string) => {
+    if (!destructive && state.kind === 'installed') {
+      dispatch({ type: 'hosted-install-failed', message })
+      return
+    }
+    dispatch({ type: 'install-failed', message })
+  }
+
   try {
     const target = explicit ?? (await resolveHostedTarget())
     if (!target) {
-      dispatch({
-        type: 'install-failed',
-        message: `Couldn't find a valid model file in ${HOSTED_MODEL.repoId}.`,
-      })
+      failed(`Couldn't find a valid model file in ${HOSTED_MODEL.repoId}.`)
       return
     }
 
@@ -195,6 +210,7 @@ async function installFromHosted(explicit?: PendingUpdate) {
       hostedMeta,
     }
 
+    destructive = true
     const contract = await runInstall(args)
     const checkpointId = contract.version ?? contract.base_model ?? 'unknown'
 
@@ -208,7 +224,7 @@ async function installFromHosted(explicit?: PendingUpdate) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.error('hosted install failed', message)
-    dispatch({ type: 'install-failed', message: friendlyHostedError(message) })
+    failed(friendlyHostedError(message))
   }
 }
 
@@ -240,9 +256,19 @@ async function runUpdateCheck() {
   const current = currentSentinel?.hosted
     ? { filename: currentSentinel.hosted.filename, lfsOid: currentSentinel.hosted.lfsOid }
     : null
+  // A replace can finish while this is in flight. The result was computed
+  // against the model that was installed at the time, so attaching it to a
+  // different one would offer an "update" derived from a model the user has
+  // already swapped out.
+  const checkedAgainst = currentSentinel
+  const stale = () => currentSentinel !== checkedAgainst
   dispatch({ type: 'update-check-started' })
   try {
     const { hasUpdate, latest } = await checkHostedForUpdate({ current })
+    if (stale()) {
+      log.info('update check discarded — the installed model changed while it was in flight')
+      return
+    }
     if (!hasUpdate || !latest) {
       dispatch({ type: 'update-check-up-to-date' })
       return
@@ -254,6 +280,7 @@ async function runUpdateCheck() {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.error('update check failed', message)
+    if (stale()) return
     dispatch({ type: 'update-check-failed', message: friendlyHostedError(message) })
   }
 }

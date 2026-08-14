@@ -27,6 +27,13 @@ export type InstallState =
       updateStatus: UpdateStatus
       pendingUpdate?: PendingUpdate
       updateError?: string
+      /**
+       * Why a "Replace from .zip…" pick was refused before it started. Held on
+       * the installed state rather than routed through `install-failed` so a bad
+       * pick doesn't replace the installed card with the error card — the model
+       * is still installed, and saying otherwise would be a lie.
+       */
+      replaceError?: string
     }
   | { kind: 'error'; message: string }
 
@@ -50,6 +57,13 @@ export type InstallAction =
   | { type: 'update-check-up-to-date' }
   | { type: 'update-check-available'; pendingUpdate: PendingUpdate }
   | { type: 'update-check-failed'; message: string }
+  /** `null` clears a previous complaint once it no longer applies. */
+  | { type: 'replace-error'; message: string | null }
+  /**
+   * A hosted install that failed *before* it touched the installed model, so
+   * the card must stay put rather than fall through to `install-failed`.
+   */
+  | { type: 'hosted-install-failed'; message: string }
   | { type: 'wipe' }
   | { type: 'retry' }
 
@@ -116,6 +130,7 @@ export function reduceInstallState(state: InstallState, action: InstallAction): 
         updateStatus: 'checking',
         pendingUpdate: undefined,
         updateError: undefined,
+        replaceError: undefined,
       }
     case 'update-check-up-to-date':
       if (state.kind !== 'installed') return state
@@ -141,6 +156,19 @@ export function reduceInstallState(state: InstallState, action: InstallAction): 
         pendingUpdate: undefined,
         updateError: action.message,
       }
+    case 'replace-error': {
+      if (state.kind !== 'installed') return state
+      // `||`, not `??`: an empty message would otherwise be stored as a
+      // truthy-absent error that renders nothing but still forces a re-render.
+      const message = action.message || undefined
+      // Keep the identity stable when nothing changed, so `dispatch` skips the
+      // re-render — this fires on every pick, including valid ones.
+      if (state.replaceError === message) return state
+      return { ...state, replaceError: message }
+    }
+    case 'hosted-install-failed':
+      if (state.kind !== 'installed') return state
+      return { ...state, updateStatus: 'error', updateError: action.message, pendingUpdate: undefined }
     case 'wipe':
       return { kind: 'empty' }
     case 'retry':
