@@ -219,6 +219,117 @@ describe('reduceInstallState — update check on installed', () => {
   })
 })
 
+describe('reduceInstallState — replacing an installed model', () => {
+  it('file-picked starts an install straight from installed, with no trip through empty', () => {
+    // The whole point of "Replace from .zip…": the same action the drop zone
+    // uses, dispatched without wiping first.
+    const next = reduceInstallState(installed(), { type: 'file-picked' })
+    expect(next).toEqual({
+      kind: 'installing',
+      phase: 'unpacking',
+      progress: 0,
+      completed: 0,
+      total: 5,
+    })
+  })
+
+  it('install-success rewrites the checkpoint and timestamp', () => {
+    const next = reduceInstallState(installed({ checkpointId: 'old', installedAt: 1 }), {
+      type: 'install-success',
+      checkpointId: 'slop hammer 0.8b v0.4_600',
+      installedAt: 1700000009999,
+    })
+    expect(next).toEqual({
+      kind: 'installed',
+      checkpointId: 'slop hammer 0.8b v0.4_600',
+      installedAt: 1700000009999,
+      updateStatus: 'idle',
+    })
+  })
+
+  it('replace-error keeps the card installed instead of dropping to the error card', () => {
+    // Routing this through install-failed would swap the installed card for the
+    // error card, whose Retry maps to `empty` — claiming nothing is installed
+    // when the model is still on disk and still loaded.
+    const next = reduceInstallState(installed({ checkpointId: 'v1', installedAt: 42 }), {
+      type: 'replace-error',
+      message: 'Please pick a .zip file.',
+    })
+    expect(next).toEqual({
+      kind: 'installed',
+      checkpointId: 'v1',
+      installedAt: 42,
+      updateStatus: 'idle',
+      replaceError: 'Please pick a .zip file.',
+    })
+  })
+
+  it('ignores replace-error when nothing is installed', () => {
+    const s: InstallState = { kind: 'empty' }
+    expect(reduceInstallState(s, { type: 'replace-error', message: 'nope' })).toBe(s)
+  })
+
+  it('clears the complaint once a valid zip is picked', () => {
+    // Otherwise "Please pick a .zip file." stays up while the user is being
+    // asked to confirm a zip they just picked.
+    const next = reduceInstallState(installed({ replaceError: 'Please pick a .zip file.' }), {
+      type: 'replace-error',
+      message: null,
+    })
+    if (next.kind !== 'installed') throw new Error('expected installed')
+    expect(next.replaceError).toBeUndefined()
+  })
+
+  it('does not re-render when the replace error is unchanged', () => {
+    // This fires on every pick; a fresh object each time would rebuild the card
+    // out from under the change handler that dispatched it.
+    const s = installed()
+    expect(reduceInstallState(s, { type: 'replace-error', message: null })).toBe(s)
+    const withError = installed({ replaceError: 'boom' })
+    expect(reduceInstallState(withError, { type: 'replace-error', message: 'boom' })).toBe(withError)
+  })
+
+  it('clears a stale replace error when an update check starts', () => {
+    const next = reduceInstallState(installed({ replaceError: 'Please pick a .zip file.' }), {
+      type: 'update-check-started',
+    })
+    if (next.kind !== 'installed') throw new Error('expected installed')
+    expect(next.replaceError).toBeUndefined()
+  })
+
+  it('treats an empty message as no error rather than an invisible one', () => {
+    const s = installed()
+    expect(reduceInstallState(s, { type: 'replace-error', message: '' })).toBe(s)
+  })
+
+  it('keeps the installed card when a hosted install fails before touching the model', () => {
+    // Same trap as the non-zip case: until runInstall has run, the model is
+    // still on disk and still loaded, so the error card would be a lie.
+    const next = reduceInstallState(installed({ updateStatus: 'available', pendingUpdate: { filename: 'x', lfsOid: 'y', url: 'z' } }), {
+      type: 'hosted-install-failed',
+      message: "Couldn't reach Hugging Face",
+    })
+    if (next.kind !== 'installed') throw new Error('expected installed')
+    expect(next.checkpointId).toBe('v1')
+    expect(next.updateStatus).toBe('error')
+    expect(next.updateError).toBe("Couldn't reach Hugging Face")
+    expect(next.pendingUpdate).toBeUndefined()
+  })
+
+  it('ignores hosted-install-failed when nothing is installed', () => {
+    // From the drop zone there is no card to protect; install-failed is right.
+    const s: InstallState = { kind: 'empty' }
+    expect(reduceInstallState(s, { type: 'hosted-install-failed', message: 'boom' })).toBe(s)
+  })
+
+  it('drops the replace error once a replace actually starts', () => {
+    const next = reduceInstallState(installed({ replaceError: 'Please pick a .zip file.' }), {
+      type: 'file-picked',
+    })
+    expect(next).not.toHaveProperty('replaceError')
+  })
+})
+
 describe('reduceInstallState — recovery', () => {
   it('installed → empty on wipe', () => {
     expect(reduceInstallState(installed(), { type: 'wipe' })).toEqual({ kind: 'empty' })

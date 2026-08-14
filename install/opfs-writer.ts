@@ -16,8 +16,16 @@ export class OpfsWriter implements OpfsAdapterLike {
     const root = await navigator.storage.getDirectory()
     try {
       await root.removeEntry(MODEL_ROOT_DIR, { recursive: true })
-    } catch {
-      // not present — fine
+    } catch (err) {
+      // Nothing to remove is the normal first-install case. Anything else has
+      // to be fatal: replacing a model is the one flow where the directory is
+      // guaranteed to exist, and writes here are per-file with `create: true`.
+      // Swallowing a real failure would leave the previous model's files in
+      // place and write the new ones over them — and `loadAllModelFiles` walks
+      // `data_0…data_N` until the first gap, so a model with fewer shards than
+      // its predecessor would silently load new shard 0 alongside a stale
+      // shard 1.
+      if ((err as { name?: string } | null)?.name !== 'NotFoundError') throw err
     }
     await modelDir(true)
   }

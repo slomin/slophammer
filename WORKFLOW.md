@@ -82,6 +82,17 @@ document, options page and content scripts — which is the whole point.
    `requestAnimationFrame` inside a single `Runtime.evaluate`.
 7. `innerText` is empty in a tab that has never been rendered. Use
    `textContent`, or `Page.bringToFront` first.
+8. **`pnpm debug logs` replays each context's retained console buffer when it
+   attaches.** The tally is cumulative since that context booted, not a count
+   for the window you watched. Two consecutive captures showed the same
+   "5 warnings" from events minutes earlier. Check the timestamps inside the
+   messages before believing a warning is new, or relaunch for a clean buffer.
+9. **A blocking dialog stalls the CDP call that triggered it.** `window.confirm`
+   inside a `change` handler means `DOM.setFileInputFiles` does not resolve
+   until the dialog is answered — fire the pick without awaiting it, then
+   handle `Page.javascriptDialogOpening`. Never detach while a modal is open:
+   the renderer stays unresponsive and even `Runtime.enable` times out, which
+   looks exactly like a hung extension.
 
 ## MV3 gotchas (read before changing anything messaging-related)
 
@@ -208,6 +219,14 @@ context-menu click
   script only runs top-level, so `captureSelectionRect()` returned null,
   positioning was skipped entirely, and the card rendered below the fold.
   Fix: fall back to a viewport-anchored placement.
+- **A failure action that is right in one state can lie in another.** Replacing
+  an installed model reuses the manual-install path, whose non-`.zip` rejection
+  dispatches `install-failed`. From `empty` that correctly shows the error card;
+  from `installed` it would *replace* the installed card with it, and that
+  card's Retry maps to `empty` — telling the user nothing is installed while the
+  model is still on disk and still loaded. Guarded `replace-error` action
+  instead, kept on the installed state like `updateError`. Worth checking any
+  unguarded action reachable from a newly-added state.
 - **A missing model produced invented verdicts.** Any load failure fell back to
   `FakeClassifierRepository`, whose hash-derived percentages rendered exactly
   like real ones. The E2E suite passed *because* of this. Fix: fail loudly;

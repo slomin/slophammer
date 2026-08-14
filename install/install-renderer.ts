@@ -1,4 +1,5 @@
 import type { InstallState, PendingUpdate, UpdateStatus } from './install-ui-state'
+import { decideReplace } from './replace-request'
 
 export interface InstallHandlers {
   onInstallHosted(): void
@@ -7,6 +8,11 @@ export interface InstallHandlers {
   onRetry(): void
   onCheckForUpdates(): void
   onInstallUpdate(pending: PendingUpdate): void
+  /**
+   * Why a "Replace from .zip…" pick was refused before any install started, or
+   * `null` once a valid pick makes an earlier complaint obsolete.
+   */
+  onReplaceError(message: string | null): void
 }
 
 function escapeHtml(s: string): string {
@@ -53,6 +59,36 @@ function paragraph(text: string): HTMLElement {
   return p
 }
 
+/**
+ * Wires a button to a hidden `<input type="file">` and forwards the pick.
+ *
+ * Every install entry point (drop zone, error card, installed card) needs the
+ * same three things: click-to-open, read `files[0]`, and reset `value` so
+ * re-picking the *same* file fires `change` again.
+ */
+function wireFilePicker(
+  scope: HTMLElement,
+  buttonTestId: string,
+  inputTestId: string,
+  onPicked: (file: File) => void,
+): void {
+  const button = scope.querySelector<HTMLButtonElement>(`[data-testid="${buttonTestId}"]`)!
+  const input = scope.querySelector<HTMLInputElement>(`[data-testid="${inputTestId}"]`)!
+
+  button.addEventListener('click', (e) => {
+    // The drop zone wraps its buttons and handles drop events; keep the click
+    // from reaching it so adding a zone-level click handler later cannot
+    // double-open the picker.
+    e.stopPropagation()
+    input.click()
+  })
+  input.addEventListener('change', () => {
+    const file = input.files?.[0]
+    input.value = ''
+    if (file) onPicked(file)
+  })
+}
+
 function buildEmpty(handlers: InstallHandlers): HTMLElement {
   const wrap = document.createElement('div')
   wrap.className = 'drop-zone'
@@ -66,23 +102,14 @@ function buildEmpty(handlers: InstallHandlers): HTMLElement {
     </div>
     <input type="file" accept=".zip" hidden data-testid="file-input" />
   `
-  const input = wrap.querySelector<HTMLInputElement>('[data-testid="file-input"]')!
   const hosted = wrap.querySelector<HTMLButtonElement>('[data-testid="install-hosted"]')!
-  const fileBtn = wrap.querySelector<HTMLButtonElement>('[data-testid="install-file"]')!
-
   hosted.addEventListener('click', (e) => {
     e.stopPropagation()
     handlers.onInstallHosted()
   })
-  fileBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    input.click()
-  })
-  input.addEventListener('change', () => {
-    const file = input.files?.[0]
-    if (file) handlers.onFile(file)
-    input.value = ''
-  })
+
+  wireFilePicker(wrap, 'install-file', 'file-input', (file) => handlers.onFile(file))
+
   wrap.addEventListener('dragover', (e) => {
     e.preventDefault()
     wrap.classList.add('dragover')
@@ -151,7 +178,7 @@ function buildInstalledCard(
   wrap.className = 'install-card'
   wrap.dataset.testid = 'installed-card'
   const when = new Date(state.installedAt).toLocaleString()
-  const { updateStatus, pendingUpdate, updateError } = state
+  const { updateStatus, pendingUpdate, updateError, replaceError } = state
 
   wrap.innerHTML = `
     <span class="status" aria-label="installed">✓</span>
@@ -166,10 +193,17 @@ function buildInstalledCard(
         <button class="btn" type="button" data-testid="check-updates"${updateStatus === 'checking' ? ' disabled' : ''}>
           ${updateStatus === 'checking' ? 'Checking…' : 'Check for updates'}
         </button>
+        <button class="btn" type="button" data-testid="replace-file"${updateStatus === 'checking' ? ' disabled' : ''}>Replace from .zip…</button>
         ${renderUpdateStatusInline(updateStatus, pendingUpdate, updateError)}
+        ${
+          replaceError
+            ? `<span class="update-note error" data-testid="replace-error">${escapeHtml(replaceError)}</span>`
+            : ''
+        }
       </div>
     </div>
     <button class="btn danger" type="button" data-testid="reinstall">↻ Re-install</button>
+    <input type="file" accept=".zip" hidden data-testid="replace-file-input" />
   `
   const checkBtn = wrap.querySelector<HTMLButtonElement>('[data-testid="check-updates"]')!
   checkBtn.addEventListener('click', () => handlers.onCheckForUpdates())
@@ -178,6 +212,19 @@ function buildInstalledCard(
   if (installUpdateBtn && pendingUpdate) {
     installUpdateBtn.addEventListener('click', () => handlers.onInstallUpdate(pendingUpdate))
   }
+
+  wireFilePicker(wrap, 'replace-file', 'replace-file-input', (file) => {
+    const decision = decideReplace(file.name)
+    if (decision.kind === 'reject') {
+      handlers.onReplaceError(decision.message)
+      return
+    }
+    // Drop any earlier "not a zip" complaint now, not after confirming — it is
+    // already obsolete, and leaving it up while asking about a valid zip reads
+    // as if the pick had been refused.
+    handlers.onReplaceError(null)
+    if (confirm(decision.prompt)) handlers.onFile(file)
+  })
 
   const reinstall = wrap.querySelector<HTMLButtonElement>('[data-testid="reinstall"]')!
   reinstall.addEventListener('click', () => {
@@ -228,13 +275,6 @@ function buildErrorCard(message: string, handlers: InstallHandlers): HTMLElement
   const retry = wrap.querySelector<HTMLButtonElement>('[data-testid="retry"]')!
   retry.addEventListener('click', () => handlers.onRetry())
 
-  const fileBtn = wrap.querySelector<HTMLButtonElement>('[data-testid="install-from-file"]')!
-  const fileInput = wrap.querySelector<HTMLInputElement>('[data-testid="error-file-input"]')!
-  fileBtn.addEventListener('click', () => fileInput.click())
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0]
-    if (file) handlers.onFile(file)
-    fileInput.value = ''
-  })
+  wireFilePicker(wrap, 'install-from-file', 'error-file-input', (file) => handlers.onFile(file))
   return wrap
 }
