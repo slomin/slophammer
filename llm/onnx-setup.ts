@@ -3,6 +3,7 @@ import { PreTrainedTokenizer } from '@huggingface/transformers'
 import type { ClassifierRepository } from './classifier-repository'
 import { validateContract } from './contract'
 import { OnnxClassifierRepository } from './onnx-classifier-repository'
+import { resolveRuntimeContract } from './runtime-contract'
 import type { InferenceSessionLike, TokenizerLike } from './onnx-deps'
 import { loadAllModelFiles, type ReadProgress } from './opfs-model-reader'
 
@@ -46,10 +47,21 @@ export async function setupOnnxClassifier(
     externalData,
   })
 
+  // tokenizer.json carries the tokenizer's own padding declaration
+  // ({direction, pad_id}); the session declares its output names. Both are
+  // authoritative, so nothing has to be guessed.
+  const runtime = resolveRuntimeContract({
+    contract,
+    tokenizerPadId: (tokenizer as unknown as { pad_token_id?: number }).pad_token_id ?? null,
+    tokenizerPadding: (tokenizerData as { padding?: { direction?: unknown; pad_id?: unknown } }).padding,
+    sessionOutputNames: session.outputNames,
+  })
+
   return new OnnxClassifierRepository({
     tokenizer: tokenizer as unknown as TokenizerLike,
     session: session as unknown as InferenceSessionLike,
     contract,
     createTensor: (kind, data, dims) => new ort.Tensor(kind, data, dims),
+    runtime,
   })
 }

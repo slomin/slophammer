@@ -136,7 +136,9 @@ function buildUnpackingCard(
     </div>
     <div class="progress"><div data-testid="progress-fill" style="width:${progress.toFixed(1)}%"></div></div>
     <div class="cur-file" data-testid="current-file">${currentFile ? escapeHtml(currentFile) : 'decompressing…'}</div>
-    <div class="count" data-testid="install-count">${completed} / ${total} files</div>
+    <div class="count" data-testid="install-count">${
+      total > 0 ? `${completed} / ${total} files` : `${completed} files unpacked`
+    }</div>
   `
   return wrap
 }

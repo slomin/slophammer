@@ -29,8 +29,17 @@ export function computeBinary(rawPct: RawProbs): BinaryCollapse {
   return { humanBinary, aiBinary, winner, winPct }
 }
 
+/**
+ * Confidence bands on the collapsed 0–100 percentage. These are presentation
+ * thresholds chosen for the card, deliberately independent of the contract's
+ * lo_threshold / hi_threshold, which are 0–1 training-side calibration
+ * metadata describing a different quantity. See llm/contract.ts.
+ */
+export const HIGH_CONFIDENCE_PCT = 85
+export const MED_CONFIDENCE_PCT = 65
+
 export function verdictDescriptor(winPct: number, side: BinarySide): VerdictDescriptor {
-  if (winPct >= 85) {
+  if (winPct >= HIGH_CONFIDENCE_PCT) {
     return {
       side,
       label: side === 'human' ? 'HUMAN' : 'AI',
@@ -39,7 +48,7 @@ export function verdictDescriptor(winPct: number, side: BinarySide): VerdictDesc
       confidenceText: 'HIGH CONFIDENCE',
     }
   }
-  if (winPct >= 65) {
+  if (winPct >= MED_CONFIDENCE_PCT) {
     return {
       side,
       label: side === 'human' ? 'HUMAN-LEANING' : 'AI-LEANING',

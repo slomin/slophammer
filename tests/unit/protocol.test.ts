@@ -26,14 +26,9 @@ const sampleResult: ClassifyResult = {
   probs: [0.1, 0.2, 0.3, 0.4],
   rawPct: [10, 20, 30, 40],
   aiScore: 0.9,
-  humanPct: 0,
-  mixedPct: 0,
-  aiPct: 100,
   verdict: 'ai',
-  primaryPct: 100,
-  primaryLabel: 'AI-Generated',
-  headline: 'AI-Generated',
   tokenCount: 10,
+  analysedTokens: 10,
   truncated: false,
 }
 

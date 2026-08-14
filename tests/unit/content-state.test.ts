@@ -10,14 +10,9 @@ const result: ClassifyResult = {
   probs: [0.05, 0.1, 0.2, 0.65],
   rawPct: [5, 10, 20, 65],
   aiScore: 0.95,
-  humanPct: 0,
-  mixedPct: 0,
-  aiPct: 100,
   verdict: 'ai',
-  primaryPct: 100,
-  primaryLabel: 'AI-Generated',
-  headline: 'AI-Generated',
   tokenCount: 12,
+  analysedTokens: 12,
   truncated: false,
 }
 

@@ -95,6 +95,13 @@ Remote code / hosted model explanation:
 > Lets the extension interact with the current tab when the user invokes the
 > context-menu action.
 
+`scripting`:
+
+> Injects the content script into the current tab when the user chooses "Check
+> with Slop Hammer" and no content script is running there yet. This happens on
+> tabs that were already open when the extension was installed or updated.
+> Without it the menu action silently does nothing on those tabs.
+
 `offscreen`:
 
 > Runs local model loading and inference in an offscreen extension document so
@@ -159,5 +166,5 @@ Promo asset:
 - `pnpm typecheck` passes.
 - `pnpm build` passes.
 - `pnpm test:e2e` passes.
-- `pnpm release` produces the intended `slophammer-0.3.0-chrome.zip`.
+- `pnpm release` produces the intended `slophammer-1.0.0-chrome.zip`.
 - The generated ZIP has `manifest.json` at the ZIP root.

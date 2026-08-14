@@ -50,10 +50,18 @@ export const CARD_STYLES = `
   }
 
   .sh-card * { box-sizing: border-box; }
+
+  .sh-truncation {
+    margin-top: 4px;
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    color: var(--sh-heavy);
+  }
   .sh-card[data-state="idle"] { display: none; }
   .hide { display: none !important; }
 
   /* view: minimised — hide everything except the head */
+  .sh-card[data-view="minimised"] .sh-truncation,
   .sh-card[data-view="minimised"] .sh-preview,
   .sh-card[data-view="minimised"] .loading-row,
   .sh-card[data-view="minimised"] .sh-verdict,

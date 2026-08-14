@@ -181,3 +181,15 @@ describe('renderInstall — error state', () => {
     expect(handlers.onRetry).toHaveBeenCalledOnce()
   })
 })
+
+describe('unpacking progress — unknown total', () => {
+  it('omits the denominator when the total is not known', () => {
+    // The zip is streamed, so the entry count is not knowable up front.
+    // Reporting completed as the total made this always read "n of n".
+    const root = document.createElement('div')
+    renderInstall(root, { kind: 'installing', phase: 'unpacking', progress: 42, completed: 3, total: 0 }, makeHandlers())
+    const text = root.querySelector('[data-testid="install-count"]')!.textContent!
+    expect(text).toContain('3 files unpacked')
+    expect(text).not.toContain('/')
+  })
+})

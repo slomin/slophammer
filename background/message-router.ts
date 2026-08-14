@@ -33,11 +33,18 @@ export function forwardToTab(
   tabId: number,
   msg: ExtensionMessage,
 ): void {
-  sendMessage(tabId, msg).catch(() => {
-    // Silent — broadcasts (e.g. model:status) target every tab, most of which
-    // don't have our content script. Logging each failure floods the inspector.
-    // Matches references/background/message-router.ts.
-  })
+  try {
+    sendMessage(tabId, msg).catch(() => {
+      // Silent — broadcasts (e.g. model:status) target every tab, most of which
+      // don't have our content script. Logging each failure floods the inspector.
+      // Matches references/background/message-router.ts.
+    })
+  } catch (err) {
+    // chrome.tabs.sendMessage throws *synchronously* for an invalid tabId, so
+    // the .catch above never attaches and the error escapes the router handler
+    // as "router handler failed". Observed with a malformed classify:result.
+    logger.warn('forwardToTab: send rejected outright', { tabId, err: String(err) })
+  }
 }
 
 export interface AttachOptions {

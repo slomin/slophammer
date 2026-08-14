@@ -9,14 +9,9 @@ const aiResult: ClassifyResult = {
   probs: [0.05, 0.1, 0.15, 0.7],
   rawPct: [5, 10, 15, 70],
   aiScore: 0.95,
-  humanPct: 0,
-  mixedPct: 0,
-  aiPct: 100,
   verdict: 'ai',
-  primaryPct: 100,
-  primaryLabel: 'AI-Generated',
-  headline: 'AI-Generated',
   tokenCount: 40,
+  analysedTokens: 40,
   truncated: false,
 }
 
@@ -25,12 +20,7 @@ const humanResult: ClassifyResult = {
   probs: [0.92, 0.05, 0.02, 0.01],
   rawPct: [92, 5, 2, 1],
   aiScore: 0.05,
-  humanPct: 100,
-  mixedPct: 0,
-  aiPct: 0,
   verdict: 'human',
-  primaryLabel: 'Human Written',
-  headline: 'Human Written',
 }
 
 function testId(root: ShadowRoot, id: string): HTMLElement | null {
@@ -320,5 +310,88 @@ describe('view flag (minimised)', () => {
       kind: 'error', requestId: 'r1', preview: 'x', wordCount: 1, error: 'oops',
     })
     expect(root.dataset.view).toBe('minimised')
+  })
+})
+
+describe('renderState — truncation note', () => {
+  const ready = (result: ClassifyResult): CardState => ({
+    kind: 'ready',
+    requestId: 'r1',
+    preview: 'preview',
+    wordCount: 900,
+    result,
+  })
+
+  it('stays hidden when the whole selection was analysed', () => {
+    const card = buildCard()
+    renderState(card, ready(aiResult))
+    const note = testId(card.shadow, 'truncation-note')!
+    expect(note.classList.contains('hide')).toBe(true)
+    expect(note.textContent).toBe('')
+  })
+
+  it('tells the user what was actually analysed when truncated', () => {
+    const card = buildCard()
+    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
+    const note = testId(card.shadow, 'truncation-note')!
+    expect(note.classList.contains('hide')).toBe(false)
+    expect(note.textContent).toBe('Analysed the last 512 of 1,665 tokens')
+  })
+
+  it('clears the note when a later untruncated result renders into the same card', () => {
+    const card = buildCard()
+    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
+    renderState(card, ready(aiResult))
+    const note = testId(card.shadow, 'truncation-note')!
+    expect(note.classList.contains('hide')).toBe(true)
+    expect(note.textContent).toBe('')
+  })
+
+  it('is hidden while loading', () => {
+    const card = buildCard()
+    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
+    renderState(card, { kind: 'loading', requestId: 'r2', preview: 'p', wordCount: 5 })
+    expect(testId(card.shadow, 'truncation-note')!.classList.contains('hide')).toBe(true)
+  })
+})
+
+// Icon-only controls and status changes need names and live regions, or the
+// card is opaque to a screen reader.
+describe('card accessibility surface', () => {
+  it('names the card as a region', () => {
+    const card = buildCard()
+    const root = testId(card.shadow, 'card-root')!
+    expect(root.getAttribute('role')).toBe('region')
+    expect(root.getAttribute('aria-label')).toBeTruthy()
+  })
+
+  it('announces the verdict politely when it replaces the spinner', () => {
+    const card = buildCard()
+    const box = testId(card.shadow, 'verdict-box')!
+    expect(box.getAttribute('role')).toBe('status')
+    expect(box.getAttribute('aria-live')).toBe('polite')
+  })
+
+  it('announces the loading state', () => {
+    const card = buildCard()
+    expect(testId(card.shadow, 'loading-row')!.getAttribute('role')).toBe('status')
+  })
+
+  it('marks errors as alerts', () => {
+    const card = buildCard()
+    expect(testId(card.shadow, 'error-box')!.getAttribute('role')).toBe('alert')
+  })
+
+  it('gives every icon-only button an accessible name', () => {
+    const card = buildCard()
+    for (const id of ['btn-minimise', 'btn-close']) {
+      const btn = testId(card.shadow, id)!
+      expect(btn.getAttribute('aria-label'), `${id} needs an aria-label`).toBeTruthy()
+    }
+  })
+
+  it('reflects the advanced toggle state for assistive tech', () => {
+    const card = buildCard()
+    expect(testId(card.shadow, 'mode-toggle')!.hasAttribute('aria-pressed')).toBe(true)
   })
 })

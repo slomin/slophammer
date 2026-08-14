@@ -29,8 +29,52 @@ export default defineBackground(() => {
     warn: (msg, data) => log.warn(msg, data),
   }
 
+  const DEFAULT_ACTION_TITLE = 'Slop Hammer — click to open options'
+  const CONTENT_SCRIPT_FILE = 'content-scripts/content.js'
+
+  // A tab can lack a live content script for two everyday reasons: the page
+  // is one Chrome refuses to inject into, or the tab was already open when
+  // the extension updated, which orphans the old script. Both used to fail
+  // silently. Probe first, inject on demand (a user gesture makes this safe —
+  // see WORKFLOW.md on why onInstalled injection is not), and report failure.
+  async function ensureContentScript(
+    tabId: number,
+    options: { inject: boolean } = { inject: true },
+  ): Promise<boolean> {
+    // Scoped to the tab: a warning raised for one tab must not follow the user
+    // to another, and a success here must not clear another tab's warning.
+    chrome.action.setBadgeText({ text: '', tabId }).catch(() => {})
+    chrome.action.setTitle({ title: DEFAULT_ACTION_TITLE, tabId }).catch(() => {})
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'ping' })
+      return true
+    } catch {
+      // No live listener — fall through and inject one.
+    }
+    if (!options.inject) return false
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT_FILE] })
+      log.info('injected content script on demand', { tabId })
+      return true
+    } catch (err) {
+      log.warn('cannot inject content script', { tabId, err: String(err) })
+      return false
+    }
+  }
+
+  function signalUnreachable(tabId: number): void {
+    log.warn('tab unreachable, signalling on the toolbar icon', { tabId })
+    chrome.action.setBadgeText({ text: '!', tabId }).catch(() => {})
+    chrome.action.setBadgeBackgroundColor({ color: '#c0392b', tabId }).catch(() => {})
+    chrome.action
+      .setTitle({ title: 'Slop Hammer cannot run on this page. Try reloading it first.', tabId })
+      .catch(() => {})
+  }
+
   registerContextMenu({
     logger: menuLogger,
+    ensureContentScript,
+    onUnreachable: signalUnreachable,
     sendToTab: (tabId, msg: SelectionTooShortMessage | ClassifyStartedMessage) => {
       chrome.tabs.sendMessage(tabId, msg).catch((err) => log.warn('sendToTab failed', String(err)))
     },

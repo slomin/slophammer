@@ -1,6 +1,6 @@
 {
   "name": "slophammer",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Chrome extension that scores text for AI-slop content.",
   "private": true,
   "type": "module",
@@ -19,7 +19,8 @@
     "reload": "node scripts/reload-extension.mjs",
     "setup:chrome": "node scripts/install-chrome-for-testing.mjs",
     "typecheck": "tsc --noEmit",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "debug": "node scripts/debug-extension.mjs"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {

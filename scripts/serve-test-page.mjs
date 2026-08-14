@@ -205,6 +205,13 @@ ${hostile ? HOSTILE_CSS : ''}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`)
+  // Chrome always asks for this; a 404 puts a permanent red error in the
+  // console during QA, which hides the errors we actually care about.
+  if (url.pathname === '/favicon.ico') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
   if (url.pathname !== '/' && url.pathname !== '/hostile') {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not found')
