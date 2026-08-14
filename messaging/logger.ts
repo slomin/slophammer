@@ -37,12 +37,34 @@ export function createLogger(source: LogSource) {
   }
 }
 
+// ONNX Runtime writes its own warnings to console.error, so forwarding the
+// console level verbatim reported library warnings as extension errors and made
+// the inspector's error channel untrustworthy. Only warnings the library itself
+// tags as warnings are downgraded; genuine errors are left alone.
+const LIBRARY_WARNING_PATTERNS = [/\[W:onnxruntime/]
+
+export function normaliseLibraryLevel(level: LogLevel, first: unknown): LogLevel {
+  if (level !== 'error') return level
+  if (typeof first !== 'string') return level
+  return LIBRARY_WARNING_PATTERNS.some((re) => re.test(first)) ? 'warn' : level
+}
+
 function serializeReason(reason: unknown) {
   if (reason instanceof Error) return { message: reason.message, stack: reason.stack }
   return String(reason)
 }
 
+const FORWARDING_INSTALLED = Symbol.for('slophammer.errorForwardingInstalled')
+
 export function installErrorForwarding(source: LogSource) {
+  // On-demand injection can evaluate the content script twice in the same
+  // isolated world. Without this guard the second instance captures the first
+  // instance's tap as `original`, so every warning is forwarded twice and the
+  // chain nests with each further injection.
+  const g = globalThis as unknown as Record<symbol, boolean>
+  if (g[FORWARDING_INSTALLED]) return
+  g[FORWARDING_INSTALLED] = true
+
   globalThis.addEventListener('error', (e: Event) => {
     const err = e as ErrorEvent
     forward(source, 'error', `uncaught: ${err.message}`, {
@@ -60,11 +82,19 @@ export function installErrorForwarding(source: LogSource) {
 
   // Tap raw console.warn / console.error so library code also surfaces in the inspector.
   for (const level of ['warn', 'error'] as const) {
-    const originalFn = original[level]
     console[level] = (...args: unknown[]) => {
-      originalFn(...args)
       const [first, ...rest] = args
-      forward(source, level, typeof first === 'string' ? first : String(first), rest.length ? rest : undefined)
+      // Emit at the corrected level too, so a library warning shows up as a
+      // warning in DevTools rather than a red error the developer has to
+      // re-triage on every run.
+      const effective = normaliseLibraryLevel(level, first)
+      original[effective](...args)
+      forward(
+        source,
+        effective,
+        typeof first === 'string' ? first : String(first),
+        rest.length ? rest : undefined,
+      )
     }
   }
 }

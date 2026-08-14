@@ -37,6 +37,10 @@ const createTensor = (_kind: 'int64', data: BigInt64Array, dims: [number, number
   dims,
 })
 
+// Resolved up front by resolveRuntimeContract in production; supplied directly
+// here so these tests stay focused on inference rather than resolution.
+const runtime = { padId: 0n, padSide: 'left' as const, outputName: 'logits' }
+
 describe('OnnxClassifierRepository.classify', () => {
   it('produces a ClassifyResult from float32 logits', async () => {
     const repo = new OnnxClassifierRepository({
@@ -44,6 +48,7 @@ describe('OnnxClassifierRepository.classify', () => {
       session: makeSession(new Float32Array([0.5, -1, -1, -1])),
       contract,
       createTensor,
+      runtime,
     })
     const result = await repo.classify('hello')
     const sum = result.probs.reduce((a, b) => a + b, 0)
@@ -60,6 +65,7 @@ describe('OnnxClassifierRepository.classify', () => {
       session: makeSession(new Float32Array([-1, -1, -1, 0.5])),
       contract,
       createTensor,
+      runtime,
     })
     const result = await repo.classify('some long ai text')
     expect(result.verdict).toBe('ai')
@@ -71,6 +77,7 @@ describe('OnnxClassifierRepository.classify', () => {
       session: makeSession(new Float32Array([0, 0, 0, 0])),
       contract,
       createTensor,
+      runtime,
     })
     const result = await repo.classify('long')
     expect(result.truncated).toBe(true)
@@ -89,6 +96,7 @@ describe('OnnxClassifierRepository.classify', () => {
       session,
       contract,
       createTensor,
+      runtime,
     })
     const result = await repo.classify('x')
     expect(outputTensor.getData).toHaveBeenCalledOnce()
@@ -105,18 +113,20 @@ describe('OnnxClassifierRepository.classify', () => {
       session,
       contract,
       createTensor,
+      runtime,
     })
     await expect(repo.classify('x')).rejects.toThrow(/logits/i)
   })
 
-  it('uses contract.output_name when specified', async () => {
+  it('reads the output named by the resolved runtime contract', async () => {
     const outputTensor: TensorLike = { data: new Float32Array([0, 0, 0, 0.5]), type: 'float32' }
     const session: InferenceSessionLike = { run: vi.fn(async () => ({ my_out: outputTensor })) }
     const repo = new OnnxClassifierRepository({
       tokenizer: makeTokenizer([1]),
       session,
-      contract: { ...contract, output_name: 'my_out' },
+      contract,
       createTensor,
+      runtime: { ...runtime, outputName: 'my_out' },
     })
     const r = await repo.classify('x')
     expect(r.verdict).toBe('ai')
@@ -133,8 +143,9 @@ describe('OnnxClassifierRepository.classify', () => {
     const repo = new OnnxClassifierRepository({
       tokenizer: makeTokenizer([11, 12, 13]),
       session,
-      contract, // maxSeq=8, padSide=left
+      contract, // maxSeq=8
       createTensor,
+      runtime, // padSide=left, padId=0
     })
     await repo.classify('x')
     expect(capturedFeeds).toHaveLength(1)
@@ -143,5 +154,31 @@ describe('OnnxClassifierRepository.classify', () => {
     expect(ids).toEqual([0, 0, 0, 0, 0, 11, 12, 13])
     const mask = Array.from(feeds.attention_mask!.data, (b) => Number(b))
     expect(mask).toEqual([0, 0, 0, 0, 0, 1, 1, 1])
+  })
+})
+
+describe('OnnxClassifierRepository.dispose', () => {
+  it('releases the underlying session', async () => {
+    const release = vi.fn(async () => {})
+    const repo = new OnnxClassifierRepository({
+      tokenizer: makeTokenizer([1]),
+      session: { run: vi.fn(async () => ({ logits: { data: new Float32Array([0, 0, 0, 0]) } })), release },
+      contract,
+      createTensor,
+      runtime,
+    })
+    await repo.dispose()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('is a no-op when the session cannot be released', async () => {
+    const repo = new OnnxClassifierRepository({
+      tokenizer: makeTokenizer([1]),
+      session: makeSession(new Float32Array([0, 0, 0, 0])),
+      contract,
+      createTensor,
+      runtime,
+    })
+    await expect(repo.dispose()).resolves.toBeUndefined()
   })
 })

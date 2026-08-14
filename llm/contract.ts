@@ -1,8 +1,17 @@
 export interface SlopHammerContract {
   n_buckets: number
-  lo_threshold: number
-  hi_threshold: number
   max_seq_length: number
+  /**
+   * Training-side calibration metadata, on a 0–1 scale. Nothing in the
+   * extension consumes these: the card's verdict comes from the argmax of the
+   * four buckets, and its HIGH/MED/LOW bands are presentation thresholds on a
+   * 0–100 collapsed percentage — a different quantity on a different scale.
+   * Applying 0.03 / 0.15 to that percentage would label almost everything AI.
+   * They are recorded when present but must not be treated as verdict
+   * thresholds without a model-side definition of what they threshold.
+   */
+  lo_threshold?: number
+  hi_threshold?: number
   base_model?: string
   version?: string
   labels?: string[]
@@ -44,10 +53,13 @@ export function validateContract(c: unknown): asserts c is SlopHammerContract {
   if (typeof k.max_seq_length !== 'number' || k.max_seq_length < 1) {
     throw new Error(`Invalid max_seq_length: ${String(k.max_seq_length)}`)
   }
-  if (typeof k.lo_threshold !== 'number') {
-    throw new Error('Missing lo_threshold')
+  // Validated only when present. Requiring fields the runtime never reads
+  // rejected otherwise-valid models while protecting nothing; n_buckets and
+  // max_seq_length are the load-bearing checks.
+  if (k.lo_threshold !== undefined && typeof k.lo_threshold !== 'number') {
+    throw new Error(`Invalid lo_threshold: ${String(k.lo_threshold)}`)
   }
-  if (typeof k.hi_threshold !== 'number') {
-    throw new Error('Missing hi_threshold')
+  if (k.hi_threshold !== undefined && typeof k.hi_threshold !== 'number') {
+    throw new Error(`Invalid hi_threshold: ${String(k.hi_threshold)}`)
   }
 }

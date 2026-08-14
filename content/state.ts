@@ -7,9 +7,22 @@ export type CardState =
   | { kind: 'ready'; requestId: string; preview: string; wordCount: number; result: ClassifyResult }
   | { kind: 'error'; requestId: string | null; preview: string; wordCount: number; error: string }
 
-export type CardAction = ExtensionMessage | { type: 'dismiss' }
+export type CardAction =
+  | ExtensionMessage
+  | { type: 'dismiss' }
+  | { type: 'classify:timeout'; requestId: string }
 
 export const initialCardState: CardState = { kind: 'idle' }
+
+// Shown when a request never comes back. Without this the card spins in
+// 'loading' forever — a wedged offscreen document produces no result and no
+// error, so nothing ever moves the card out of the loading state.
+export const CLASSIFY_TIMEOUT_MESSAGE =
+  'Timed out — the local model stopped responding. Try again.'
+
+// Generous enough that a cold model load (~9s measured, slower on weaker GPUs)
+// never trips it, short enough that a wedged classifier doesn't look infinite.
+export const CLASSIFY_TIMEOUT_MS = 45_000
 
 export function reduceCardState(state: CardState, action: CardAction): CardState {
   switch (action.type) {
@@ -44,6 +57,19 @@ export function reduceCardState(state: CardState, action: CardAction): CardState
         preview: state.preview,
         wordCount: state.wordCount,
         error: action.error,
+      }
+
+    case 'classify:timeout':
+      // Only the in-flight request can time out. A stale timer, or one that
+      // fires after the result already landed, must not disturb the card.
+      if (state.kind !== 'loading') return state
+      if (state.requestId !== action.requestId) return state
+      return {
+        kind: 'error',
+        requestId: state.requestId,
+        preview: state.preview,
+        wordCount: state.wordCount,
+        error: CLASSIFY_TIMEOUT_MESSAGE,
       }
 
     case 'model:status':

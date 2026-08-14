@@ -12,6 +12,11 @@ export interface LogMessage {
   ts: number
 }
 
+/** Liveness probe: a content script answers, an absent or orphaned one does not. */
+export interface PingMessage {
+  type: 'ping'
+}
+
 export interface SelectionTooShortMessage {
   type: 'selection:too-short'
   length: number
@@ -65,6 +70,7 @@ export interface ModelInstalledMessage {
 
 export type ExtensionMessage =
   | LogMessage
+  | PingMessage
   | SelectionTooShortMessage
   | ClassifyStartedMessage
   | ClassifyRunMessage
@@ -84,6 +90,10 @@ function hasType<T extends string>(m: unknown, type: T): m is { type: T } {
 
 export function isLogMessage(m: unknown): m is LogMessage {
   return hasType(m, 'LOG')
+}
+
+export function isPing(m: unknown): m is PingMessage {
+  return hasType(m, 'ping')
 }
 
 export function isSelectionTooShort(m: unknown): m is SelectionTooShortMessage {

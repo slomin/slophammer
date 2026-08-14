@@ -36,6 +36,7 @@ export default defineConfig({
       'contextMenus',
       'activeTab',
       'offscreen',
+      'scripting',
       'storage',
       'unlimitedStorage',
     ],

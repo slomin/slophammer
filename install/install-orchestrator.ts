@@ -64,7 +64,9 @@ export async function runInstall(args: RunInstallArgs): Promise<SlopHammerContra
       fraction: Math.min(1, readBytes / total),
       currentFile: e.name,
       completedFiles: completed,
-      totalFiles: seen.size,
+      // The zip is streamed, so the entry count is not knowable up front.
+      // Reporting seen.size made the UI always read "n of n".
+      totalFiles: 0,
     })
   }
 

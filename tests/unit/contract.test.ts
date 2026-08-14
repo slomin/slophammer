@@ -50,12 +50,21 @@ describe('validateContract', () => {
     ).toThrow(/max_seq_length/)
   })
 
-  it('rejects missing lo_threshold / hi_threshold', () => {
+  // The shipping model sets these, but nothing in the extension reads them,
+  // so their absence must not reject an otherwise-valid model.
+  it('accepts a contract without the calibration thresholds', () => {
+    expect(() => validateContract({ n_buckets: 4, max_seq_length: 512 })).not.toThrow()
     expect(() =>
       validateContract({ n_buckets: 4, max_seq_length: 512, hi_threshold: 0.9 }),
+    ).not.toThrow()
+  })
+
+  it('still rejects thresholds of the wrong type', () => {
+    expect(() =>
+      validateContract({ n_buckets: 4, max_seq_length: 512, lo_threshold: 'low' }),
     ).toThrow(/lo_threshold/)
     expect(() =>
-      validateContract({ n_buckets: 4, max_seq_length: 512, lo_threshold: 0.1 }),
+      validateContract({ n_buckets: 4, max_seq_length: 512, hi_threshold: [] }),
     ).toThrow(/hi_threshold/)
   })
 })

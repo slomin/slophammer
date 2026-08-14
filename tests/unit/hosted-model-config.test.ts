@@ -20,7 +20,7 @@ describe('HOSTED_MODEL config', () => {
 
   it('pins a currentFilename that matches the version regex', () => {
     expect(HOSTED_MODEL.currentFilename).toBe('slop_hammer_0_8b_v0_1.zip')
-    expect(parseHostedZipVersion(HOSTED_MODEL.currentFilename)).toEqual({ major: 0, minor: 1 })
+    expect(parseHostedZipVersion(HOSTED_MODEL.currentFilename)).toEqual({ major: 0, minor: 1, patch: 0 })
   })
 })
 
@@ -34,11 +34,11 @@ describe('resolveHostedZipUrl', () => {
 
 describe('parseHostedZipVersion', () => {
   it('parses a canonical filename', () => {
-    expect(parseHostedZipVersion('slop_hammer_0_8b_v0_1.zip')).toEqual({ major: 0, minor: 1 })
+    expect(parseHostedZipVersion('slop_hammer_0_8b_v0_1.zip')).toEqual({ major: 0, minor: 1, patch: 0 })
   })
 
   it('parses multi-digit versions', () => {
-    expect(parseHostedZipVersion('slop_hammer_0_8b_v12_34.zip')).toEqual({ major: 12, minor: 34 })
+    expect(parseHostedZipVersion('slop_hammer_0_8b_v12_34.zip')).toEqual({ major: 12, minor: 34, patch: 0 })
   })
 
   it('returns null for non-matching names', () => {
@@ -50,10 +50,10 @@ describe('parseHostedZipVersion', () => {
 
 describe('compareHostedVersions', () => {
   it('orders by major, then minor', () => {
-    expect(compareHostedVersions({ major: 0, minor: 1 }, { major: 0, minor: 2 })).toBe(-1)
-    expect(compareHostedVersions({ major: 0, minor: 2 }, { major: 0, minor: 1 })).toBe(1)
-    expect(compareHostedVersions({ major: 1, minor: 0 }, { major: 0, minor: 9 })).toBe(1)
-    expect(compareHostedVersions({ major: 0, minor: 1 }, { major: 0, minor: 1 })).toBe(0)
+    expect(compareHostedVersions({ major: 0, minor: 1, patch: 0 }, { major: 0, minor: 2, patch: 0 })).toBe(-1)
+    expect(compareHostedVersions({ major: 0, minor: 2, patch: 0 }, { major: 0, minor: 1, patch: 0 })).toBe(1)
+    expect(compareHostedVersions({ major: 1, minor: 0, patch: 0 }, { major: 0, minor: 9, patch: 0 })).toBe(1)
+    expect(compareHostedVersions({ major: 0, minor: 1, patch: 0 }, { major: 0, minor: 1, patch: 0 })).toBe(0)
   })
 })
 
@@ -75,5 +75,51 @@ describe('pickLatestHostedZip', () => {
 
   it('returns the only versioned zip when there is one', () => {
     expect(pickLatestHostedZip(['slop_hammer_0_8b_v0_1.zip'])).toBe('slop_hammer_0_8b_v0_1.zip')
+  })
+})
+
+// Releases exist under both two- and three-part names. A two-part-only pattern
+// made pickLatestHostedZip return null, so an update check silently reported
+// "no update available".
+describe('three-part release names', () => {
+  it('parses a three-part version', () => {
+    expect(parseHostedZipVersion('slop_hammer_0_8b_v0_4_600.zip')).toEqual({
+      major: 0,
+      minor: 4,
+      patch: 600,
+    })
+  })
+
+  it('treats a two-part name as patch 0', () => {
+    expect(parseHostedZipVersion('slop_hammer_0_8b_v0_4.zip')).toEqual({
+      major: 0,
+      minor: 4,
+      patch: 0,
+    })
+  })
+
+  it('orders three-part versions by patch', () => {
+    expect(
+      compareHostedVersions({ major: 0, minor: 4, patch: 600 }, { major: 0, minor: 4, patch: 0 }),
+    ).toBe(1)
+    expect(
+      compareHostedVersions({ major: 0, minor: 4, patch: 60 }, { major: 0, minor: 4, patch: 600 }),
+    ).toBe(-1)
+  })
+
+  it('minor still outranks patch', () => {
+    expect(
+      compareHostedVersions({ major: 0, minor: 5, patch: 0 }, { major: 0, minor: 4, patch: 600 }),
+    ).toBe(1)
+  })
+
+  it('picks the newest across mixed naming', () => {
+    expect(
+      pickLatestHostedZip([
+        'slop_hammer_0_8b_v0_1.zip',
+        'slop_hammer_0_8b_v0_4_600.zip',
+        'slop_hammer_0_8b_v0_4.zip',
+      ]),
+    ).toBe('slop_hammer_0_8b_v0_4_600.zip')
   })
 })

@@ -181,9 +181,10 @@ Suggested language:
 
 `scripting`:
 
-> Reserved for extension page/content-script integration required by the
-> extension runtime. If release-prep confirms it is unused, remove it before
-> submission.
+> Injects the content script into the current tab when the user chooses "Check
+> with Slop Hammer" and no content script is running there yet. This happens on
+> tabs that were already open when the extension was installed or updated.
+> Without it the menu action silently does nothing on those tabs.
 
 `offscreen`:
 
@@ -260,8 +261,11 @@ Prepared in #16:
 - Support copy: `docs/support.md`.
 - Dashboard paste sheet: `docs/chrome-web-store-submission.md`.
 - Store screenshots and promo tile: `store-assets/chrome-web-store/`.
-- Release version: `0.3.0`.
-- `scripting` permission removed after repo inspection showed no runtime use.
+- Release version: `1.0.0`.
+- `scripting` permission removed during release prep, then restored during the
+  v1.0 hardening run: it is required to inject the content script on demand so
+  the context-menu action does not silently fail on tabs that were already open
+  when the extension was installed or updated (#19).
 - `<all_urls>` kept for v1 and justified in the dashboard paste sheet.
 - Options footer placeholder links replaced with planned public GitHub URLs.
 - `scripts/release.mjs` README text updated for the current hosted-model flow.

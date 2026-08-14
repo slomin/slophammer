@@ -3,8 +3,6 @@ import {
   argmax4,
   bucketFromArgmax,
   softmax,
-  VERDICT_HEADLINE,
-  VERDICT_PRIMARY_LABEL,
   type ClassifyResult,
   type RawProbs,
 } from './classify-result'
@@ -54,16 +52,10 @@ export class FakeClassifierRepository implements ClassifierRepository {
       rawPct,
       aiScore: 1 - probs[0],
 
-      humanPct: verdict === 'human' ? 100 : 0,
-      mixedPct: verdict === 'mixed' ? 100 : 0,
-      aiPct: verdict === 'ai' ? 100 : 0,
-
       verdict,
-      primaryPct: 100,
-      primaryLabel: VERDICT_PRIMARY_LABEL[verdict],
-      headline: VERDICT_HEADLINE[verdict],
 
       tokenCount: tokenEstimate(text),
+      analysedTokens: tokenEstimate(text),
       truncated: false,
     }
   }

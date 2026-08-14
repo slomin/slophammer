@@ -1,6 +1,7 @@
 import type { ClassifyResult, RawProbs } from '@/llm/classify-result'
 import type { CardElements } from './card-dom'
 import type { CardState } from './state'
+import { formatTruncationNote } from './truncation'
 import { computeBinary, verdictDescriptor } from './verdict'
 
 function show(el: HTMLElement): void {
@@ -32,6 +33,7 @@ export function renderState(card: CardElements, state: CardState): void {
   switch (state.kind) {
     case 'idle':
       // Host stays in DOM but card-root display:none keeps it invisible.
+      hide(refs.truncationNote)
       hide(refs.loadingRow)
       hide(refs.verdictBox)
       hide(refs.modeRow)
@@ -43,6 +45,7 @@ export function renderState(card: CardElements, state: CardState): void {
     case 'loading':
       refs.preview.textContent = state.preview
       refs.wordCount.textContent = `${state.wordCount} words`
+      hide(refs.truncationNote)
       show(refs.loadingRow)
       hide(refs.verdictBox)
       hide(refs.modeRow)
@@ -73,6 +76,7 @@ export function renderState(card: CardElements, state: CardState): void {
       refs.preview.textContent = state.preview
       refs.wordCount.textContent = `${state.wordCount} words`
       refs.errorMessage.textContent = state.error
+      hide(refs.truncationNote)
       show(refs.errorBox)
       show(refs.actionsRow)
       refs.actionsRow.classList.add('single')
@@ -89,6 +93,18 @@ export function renderState(card: CardElements, state: CardState): void {
 
 function renderReady(card: CardElements, result: ClassifyResult): void {
   const { refs } = card
+
+  // The model only reads the last max_seq_length tokens, so say so rather than
+  // implying the whole selection was judged.
+  const note = formatTruncationNote(result)
+  if (note) {
+    refs.truncationNote.textContent = note
+    show(refs.truncationNote)
+  } else {
+    refs.truncationNote.textContent = ''
+    hide(refs.truncationNote)
+  }
+
   const binary = computeBinary(result.rawPct)
   // Round once and reuse, so the chip, label, hero %, bar widths and legend
   // all agree about which side of the 65 / 85 thresholds we're on and never

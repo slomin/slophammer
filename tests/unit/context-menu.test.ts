@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildStartedMessage,
   countWords,
+  handleMenuClick,
   isSelectionLongEnough,
+  MENU_ITEM_ID,
   MIN_SELECTION_CHARS,
+  type ContextMenuDeps,
 } from '@/background/context-menu'
 
 describe('countWords', () => {
@@ -74,5 +77,121 @@ describe('buildStartedMessage', () => {
   it('counts words via countWords', () => {
     const msg = buildStartedMessage({ requestId: 'r1', text: 'one two three four' })
     expect(msg.wordCount).toBe(4)
+  })
+})
+
+describe('handleMenuClick', () => {
+  function makeDeps(overrides: Partial<ContextMenuDeps> = {}) {
+    const calls = {
+      tabMessages: [] as unknown[],
+      runtimeMessages: [] as unknown[],
+      unreachable: [] as number[],
+      offscreenEnsured: 0,
+    }
+    const deps: ContextMenuDeps = {
+      logger: { info: () => {}, warn: () => {} },
+      sendToTab: (_tabId, msg) => calls.tabMessages.push(msg),
+      sendToRuntime: (msg) => calls.runtimeMessages.push(msg),
+      ensureOffscreen: async () => {
+        calls.offscreenEnsured += 1
+      },
+      newRequestId: () => 'req-1',
+      ensureContentScript: async () => true,
+      onUnreachable: (tabId) => calls.unreachable.push(tabId),
+      ...overrides,
+    }
+    return { deps, calls }
+  }
+
+  const longText = 'x'.repeat(MIN_SELECTION_CHARS + 5)
+
+  it('ignores clicks on other menu items', async () => {
+    const { deps, calls } = makeDeps()
+    await handleMenuClick(deps, { menuItemId: 'something-else', selectionText: longText, tabId: 1 })
+    expect(calls.tabMessages).toHaveLength(0)
+    expect(calls.runtimeMessages).toHaveLength(0)
+  })
+
+  it('ignores clicks with no tab id', async () => {
+    const { deps, calls } = makeDeps()
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: longText })
+    expect(calls.runtimeMessages).toHaveLength(0)
+  })
+
+  // The silent-failure case: restricted pages, and any tab already open when
+  // the extension updated.
+  it('reports unreachable tabs instead of messaging into the void', async () => {
+    const { deps, calls } = makeDeps({ ensureContentScript: async () => false })
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: longText, tabId: 7 })
+    expect(calls.unreachable).toEqual([7])
+    expect(calls.tabMessages).toHaveLength(0)
+    expect(calls.runtimeMessages).toHaveLength(0)
+  })
+
+  it('checks reachability before sending, so the toast can actually be seen', async () => {
+    const order: string[] = []
+    const { deps } = makeDeps({
+      ensureContentScript: async () => {
+        order.push('ensure')
+        return true
+      },
+      sendToTab: () => order.push('send'),
+    })
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'too short', tabId: 3 })
+    expect(order).toEqual(['ensure', 'send'])
+  })
+
+  // Injecting the whole bundle only to reject a five-character selection is
+  // wasted work; probing is enough to know whether the toast can be delivered.
+  it('does not inject for a selection it is about to reject', async () => {
+    const calls: Array<{ inject: boolean }> = []
+    const { deps } = makeDeps({
+      ensureContentScript: async (_tabId, options) => {
+        calls.push(options)
+        return true
+      },
+    })
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'short', tabId: 3 })
+    expect(calls).toEqual([{ inject: false }])
+  })
+
+  it('injects when there is real work to do', async () => {
+    const calls: Array<{ inject: boolean }> = []
+    const { deps } = makeDeps({
+      ensureContentScript: async (_tabId, options) => {
+        calls.push(options)
+        return true
+      },
+    })
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: longText, tabId: 3 })
+    expect(calls).toEqual([{ inject: true }])
+  })
+
+  it('sends selection:too-short without classifying', async () => {
+    const { deps, calls } = makeDeps()
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'short', tabId: 3 })
+    expect(calls.tabMessages).toEqual([{ type: 'selection:too-short', length: 5 }])
+    expect(calls.runtimeMessages).toHaveLength(0)
+    expect(calls.offscreenEnsured).toBe(0)
+  })
+
+  it('starts the card, ensures the offscreen document, then dispatches the run', async () => {
+    const { deps, calls } = makeDeps()
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: longText, tabId: 42 })
+    expect((calls.tabMessages[0] as { type: string }).type).toBe('classify:started')
+    expect(calls.offscreenEnsured).toBe(1)
+    expect(calls.runtimeMessages).toEqual([
+      { type: 'classify:run', requestId: 'req-1', tabId: 42, text: longText },
+    ])
+  })
+
+  it('trims the selection before measuring it', async () => {
+    const { deps, calls } = makeDeps()
+    await handleMenuClick(deps, {
+      menuItemId: MENU_ITEM_ID,
+      selectionText: `   ${longText}   `,
+      tabId: 9,
+    })
+    expect((calls.runtimeMessages[0] as { text: string }).text).toBe(longText)
   })
 })

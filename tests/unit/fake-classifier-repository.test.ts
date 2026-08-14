@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FakeClassifierRepository } from '@/llm/fake-classifier-repository'
-import { RAW_CLASS_LABEL, VERDICT_HEADLINE, VERDICT_PRIMARY_LABEL } from '@/llm/classify-result'
+import { RAW_CLASS_LABEL } from '@/llm/classify-result'
 
 describe('FakeClassifierRepository', () => {
   const repo = new FakeClassifierRepository()
@@ -29,19 +29,10 @@ describe('FakeClassifierRepository', () => {
       expect(r.aiScore).toBeCloseTo(1 - r.probs[0]!, 10)
     })
 
-    it('verdict, primaryLabel, and headline agree', async () => {
+    it('verdict is one of the three buckets', async () => {
       const r = await repo.classify('longer sample text for classifier fake')
-      expect(r.primaryLabel).toBe(VERDICT_PRIMARY_LABEL[r.verdict])
-      expect(r.headline).toBe(VERDICT_HEADLINE[r.verdict])
+      expect(['human', 'mixed', 'ai']).toContain(r.verdict)
       expect(RAW_CLASS_LABEL.length).toBe(4)
-    })
-
-    it('single-segment mode: exactly one of aiPct/mixedPct/humanPct is 100, others 0', async () => {
-      const r = await repo.classify('hello world')
-      const buckets = [r.humanPct, r.mixedPct, r.aiPct]
-      expect(buckets.filter((v) => v === 100)).toHaveLength(1)
-      expect(buckets.filter((v) => v === 0)).toHaveLength(2)
-      expect(r.primaryPct).toBe(100)
     })
 
     it('tokenCount is positive and truncated is boolean', async () => {

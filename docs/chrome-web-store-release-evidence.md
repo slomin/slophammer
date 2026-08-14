@@ -26,14 +26,17 @@ The following checks passed on `chore/chrome-store-release-prep`:
 The generated ZIP was inspected with `unzip`.
 
 - `manifest.json` is at the ZIP root.
-- Manifest version is `0.3.0`.
+- Manifest version is `0.3.0`. (The release version has since moved to
+  `1.0.0` with the v1.0 hardening work; re-run these checks before submitting.)
 - Manifest permissions are:
   - `contextMenus`
   - `activeTab`
   - `offscreen`
   - `storage`
   - `unlimitedStorage`
-- The unused `scripting` permission is no longer present.
+- The `scripting` permission was absent at the time of this evidence run. It has
+  since been restored by the v1.0 hardening work (#19), which injects the
+  content script on demand; re-verify the permission list before submitting.
 - Host permissions remain `<all_urls>` for the v1 content-script workflow.
 
 ## Store assets

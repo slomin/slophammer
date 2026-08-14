@@ -27,6 +27,7 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm test:e2e` | Playwright E2E against CfT. |
 | `pnpm typecheck` | `tsc --noEmit`. |
 | `pnpm setup:chrome` | One-time: install Chrome for Testing into `./chrome-for-testing/`. |
+| `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
 
@@ -40,6 +41,47 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
    - `http://127.0.0.1:8765/`
    - `http://127.0.0.1:8765/hostile`
    - a real site such as Reddit when validating cross-site CSS resilience
+
+## Agent-driven debugging
+
+`scripts/debug-extension.mjs` (`pnpm debug`) talks to a browser started by
+`pnpm qa` over raw CDP. It reaches every context — service worker, offscreen
+document, options page and content scripts — which is the whole point.
+
+| Command | What it does |
+|---|---|
+| `pnpm debug status` | Targets, model install state, WebGPU availability. |
+| `pnpm debug classify "<text>"` | Classify text on the fixtures page and print the card. |
+| `pnpm debug classify --section 1` | Same, using fixture section 1. |
+| `pnpm debug logs [seconds]` | Stream console from every extension context, with an error/warning tally. |
+| `pnpm debug reach` | Which open tabs have a live content script. |
+
+**Two tools that cannot do this job:**
+
+- **`chrome-devtools` MCP** hides `chrome-extension://` contexts — `list_pages`
+  returns only ordinary web pages, so the service worker, offscreen document
+  and options page are unreachable.
+- **Playwright `connectOverCDP`** opens the browser websocket then hangs during
+  init against this browser; extension `background_page` targets are a known
+  trigger. Worse, its aborted auto-attach leaves targets *paused*, so later raw
+  CDP calls to those targets time out until Chrome is relaunched.
+
+**Rules the harness encodes, each learned from a real failure:**
+
+1. Write output with `fs.writeSync`, never buffered `console.log`. A `timeout`
+   SIGTERM discards buffered stdout, which silently produced empty runs.
+2. The MV3 service worker idles out constantly. Never assume its target exists —
+   wake it via the options page and poll for it.
+3. Put a timeout on every CDP call so a hang fails loudly instead of hanging.
+4. Give probe tabs a unique URL marker. Several tabs share a prefix and
+   `tabs.query()` returns the first match, which silently sends messages to the
+   wrong tab.
+5. `/json/new` returns before the navigation commits, so `document.readyState`
+   is `complete` on `about:blank`. Wait for the real document.
+6. Never measure animated geometry across separate CDP sessions — settle with
+   `requestAnimationFrame` inside a single `Runtime.evaluate`.
+7. `innerText` is empty in a tab that has never been rendered. Use
+   `textContent`, or `Page.bringToFront` first.
 
 ## MV3 gotchas (read before changing anything messaging-related)
 
@@ -125,9 +167,13 @@ context-menu click
   `curl http://127.0.0.1:9222/json/list` via raw CDP.
 - A CDP target's reported `url` field — it reflects the requested navigation, not the
   current location. Always `Runtime.evaluate` `location.href` in the tab to confirm.
-- `pnpm test:e2e` passing alone — the E2E uses a programmatic `classify:run` dispatch
-  because Playwright can't click native context menus. Manual smoke via the
-  context-menu is still required before a release, including the hostile local page.
+- `pnpm test:e2e` passing alone — the E2E drives the card with a synthetic
+  result because Playwright can't click native context menus and the E2E
+  profile has no model installed. Manual smoke via the context-menu is still
+  required before a release, including the hostile local page.
+- A green E2E run as proof the *pipeline* works. Those specs passed for months
+  against a fake classifier that invented verdicts whenever no model was
+  installed; the extension now fails loudly instead, and a spec guards it.
 
 ## Profile + model
 
@@ -145,6 +191,27 @@ context-menu click
   `elalpednccdbgjklegipphhapojalphi` in the CfT profile.
 
 ## Retros — bugs we already hit (so we don't rediscover)
+
+- **Concurrent requests wedged inference permanently.** Four overlapping
+  `classify:run` messages produced no results, logged no error, and left the
+  offscreen document unresponsive even to CDP — every later request in every
+  tab hung forever, recoverable only by recreating the offscreen document.
+  Sequential requests were always fine. Fix: a FIFO queue keeps `session.run()`
+  strictly one-at-a-time (`llm/classify-queue.ts`).
+- **`position: fixed` is not viewport-relative under a transformed ancestor.**
+  A `transform`/`filter`/`perspective`/`will-change` on `html` or `body` makes
+  it the containing block, so the card's offsets were measured from the
+  document. With the page scrolled 785px the card rendered at viewport top
+  -777. Fix: measure where the card actually landed and correct by the
+  difference, rather than enumerating the CSS properties that cause it.
+- **Selections inside iframes have no rect in the top frame.** The content
+  script only runs top-level, so `captureSelectionRect()` returned null,
+  positioning was skipped entirely, and the card rendered below the fold.
+  Fix: fall back to a viewport-anchored placement.
+- **A missing model produced invented verdicts.** Any load failure fell back to
+  `FakeClassifierRepository`, whose hash-derived percentages rendered exactly
+  like real ones. The E2E suite passed *because* of this. Fix: fail loudly;
+  the fake is test-only.
 
 - **Stable Chrome: card stuck in `loading`.** The SW's `classify:result`
   handler was `await`ing `chrome.tabs.sendMessage(tabId, msg)` inside the

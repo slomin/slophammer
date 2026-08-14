@@ -2,39 +2,21 @@ export type Verdict = 'ai' | 'mixed' | 'human'
 
 export type RawProbs = [number, number, number, number]
 
-export type PrimaryLabel = 'AI-Generated' | 'AI-Assisted' | 'Human Written'
-
 export interface ClassifyResult {
   probs: RawProbs
   rawPct: [number, number, number, number]
   aiScore: number
 
-  humanPct: number
-  mixedPct: number
-  aiPct: number
-
   verdict: Verdict
-  primaryPct: number
-  primaryLabel: PrimaryLabel
-  headline: string
 
+  /** Tokens in the whole selection. */
   tokenCount: number
+  /** Tokens the model actually saw — max_seq_length when truncated. */
+  analysedTokens: number
   truncated: boolean
 }
 
 export const RAW_CLASS_LABEL = ['Human', 'Lightly AI', 'Moderately AI', 'Heavily AI'] as const
-
-export const VERDICT_HEADLINE: Record<Verdict, string> = {
-  ai: 'AI-Generated',
-  mixed: 'AI-Assisted',
-  human: 'Human Written',
-}
-
-export const VERDICT_PRIMARY_LABEL: Record<Verdict, PrimaryLabel> = {
-  ai: 'AI-Generated',
-  mixed: 'AI-Assisted',
-  human: 'Human Written',
-}
 
 export function softmax(logits: readonly number[]): number[] {
   if (logits.length === 0) return []

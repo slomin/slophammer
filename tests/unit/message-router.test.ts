@@ -12,14 +12,9 @@ const sampleResult: ClassifyResult = {
   probs: [0.1, 0.2, 0.3, 0.4],
   rawPct: [10, 20, 30, 40],
   aiScore: 0.9,
-  humanPct: 0,
-  mixedPct: 0,
-  aiPct: 100,
   verdict: 'ai',
-  primaryPct: 100,
-  primaryLabel: 'AI-Generated',
-  headline: 'AI-Generated',
   tokenCount: 10,
+  analysedTokens: 10,
   truncated: false,
 }
 
@@ -128,5 +123,32 @@ describe('forwardToTab', () => {
     await Promise.resolve()
     expect(logger.warn).not.toHaveBeenCalled()
     expect(logger.info).not.toHaveBeenCalled()
+  })
+})
+
+describe('forwardToTab — synchronous send failures', () => {
+  it('does not let a synchronous throw escape the handler', () => {
+    // chrome.tabs.sendMessage throws synchronously for an invalid tabId, so
+    // the .catch() never attaches and the router logged "handler failed".
+    const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+    const throwing = () => {
+      throw new TypeError('Error in invocation of tabs.sendMessage: No matching signature')
+    }
+    expect(() =>
+      forwardToTab(throwing as never, logger, null as never, { type: 'model:load' }),
+    ).not.toThrow()
+  })
+
+  it('warns rather than staying silent when the send is rejected outright', () => {
+    const warnings: unknown[] = []
+    const logger = {
+      debug: () => {}, info: () => {}, error: () => {},
+      warn: (msg: string) => warnings.push(msg),
+    }
+    const throwing = () => {
+      throw new TypeError('bad tabId')
+    }
+    forwardToTab(throwing as never, logger, null as never, { type: 'model:load' })
+    expect(warnings).toHaveLength(1)
   })
 })

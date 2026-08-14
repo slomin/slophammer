@@ -3,7 +3,7 @@ import { ADVANCED_DRAWER_LABELS } from './verdict'
 
 export const CARD_HOST_ATTR = 'data-slop-hammer-card'
 export const CARD_HOST_SELECTOR = `[${CARD_HOST_ATTR}]`
-export const CARD_VERSION = 'v0.3'
+export const CARD_VERSION = 'v1.0'
 
 export interface AdvancedRowRefs {
   root: HTMLElement
@@ -21,6 +21,7 @@ export interface CardRefs {
   btnClose: HTMLButtonElement
   preview: HTMLElement
   wordCount: HTMLElement
+  truncationNote: HTMLElement
   loadingRow: HTMLElement
   spinner: HTMLElement
   loadingLabel: HTMLElement
@@ -101,17 +102,33 @@ function buildHead(): { head: HTMLElement; brand: HTMLElement; version: HTMLElem
   return { head, brand, version, minimise, close }
 }
 
-function buildPreview(): { row: HTMLElement; preview: HTMLElement; wordCount: HTMLElement } {
+function buildPreview(): {
+  row: HTMLElement
+  preview: HTMLElement
+  wordCount: HTMLElement
+  truncationNote: HTMLElement
+} {
   const row = el<HTMLDivElement>('div', { className: 'sh-preview' })
   const preview = el<HTMLSpanElement>('span', { className: 'prev', testId: 'preview' })
   const wordCount = el<HTMLSpanElement>('span', { className: 'wc', testId: 'word-count' })
   row.appendChild(preview)
   row.appendChild(wordCount)
-  return { row, preview, wordCount }
+  // Sits directly under the word count: the word count describes the
+  // selection, this describes what the model actually read.
+  const truncationNote = el<HTMLDivElement>('div', {
+    className: 'sh-truncation hide',
+    testId: 'truncation-note',
+  })
+  return { row, preview, wordCount, truncationNote }
 }
 
 function buildLoading(): { row: HTMLElement; spinner: HTMLElement; label: HTMLElement } {
-  const row = el<HTMLDivElement>('div', { className: 'loading-row hide', testId: 'loading-row' })
+  // role=status announces "Analysing…" without stealing focus.
+  const row = el<HTMLDivElement>('div', {
+    className: 'loading-row hide',
+    testId: 'loading-row',
+    attrs: { role: 'status' },
+  })
   const spinner = el<HTMLSpanElement>('span', { className: 'spinner', testId: 'spinner' })
   const label = el<HTMLSpanElement>('span', { testId: 'loading-label', text: 'analysing' })
   row.appendChild(spinner)
@@ -130,7 +147,12 @@ function buildVerdict(): {
   legendHuman: HTMLElement
   legendAi: HTMLElement
 } {
-  const box = el<HTMLDivElement>('div', { className: 'sh-verdict hide', testId: 'verdict-box' })
+  // The verdict replaces the spinner in place, so it needs to be announced.
+  const box = el<HTMLDivElement>('div', {
+    className: 'sh-verdict hide',
+    testId: 'verdict-box',
+    attrs: { role: 'status', 'aria-live': 'polite' },
+  })
 
   const head = el<HTMLDivElement>('div', { className: 'v-head' })
   const label = el<HTMLSpanElement>('span', { className: 'v-label', testId: 'verdict-label' })
@@ -215,7 +237,11 @@ function buildAdvanced(): { drawer: HTMLElement; rows: [AdvancedRowRefs, Advance
 }
 
 function buildError(): { box: HTMLElement; title: HTMLElement; message: HTMLElement } {
-  const box = el<HTMLDivElement>('div', { className: 'error-box hide', testId: 'error-box' })
+  const box = el<HTMLDivElement>('div', {
+    className: 'error-box hide',
+    testId: 'error-box',
+    attrs: { role: 'alert' },
+  })
   const title = el<HTMLDivElement>('div', { className: 'big', testId: 'error-title', text: "can't judge yet" })
   const message = el<HTMLDivElement>('div', { className: 'msg', testId: 'error-message' })
   box.appendChild(title)
@@ -263,7 +289,11 @@ export function buildCard(): CardElements {
   style.textContent = CARD_STYLES
   shadow.appendChild(style)
 
-  const root = el<HTMLDivElement>('div', { className: 'sh-card dark', testId: 'card-root' })
+  const root = el<HTMLDivElement>('div', {
+    className: 'sh-card dark',
+    testId: 'card-root',
+    attrs: { role: 'region', 'aria-label': 'Slop Hammer result' },
+  })
   root.dataset.state = 'idle'
   root.dataset.view = 'full'
   root.dataset.mode = 'basic'
@@ -279,6 +309,7 @@ export function buildCard(): CardElements {
 
   root.appendChild(head.head)
   root.appendChild(preview.row)
+  root.appendChild(preview.truncationNote)
   root.appendChild(loading.row)
   root.appendChild(verdict.box)
   root.appendChild(mode.row)
@@ -300,6 +331,7 @@ export function buildCard(): CardElements {
       btnClose: head.close,
       preview: preview.preview,
       wordCount: preview.wordCount,
+      truncationNote: preview.truncationNote,
       loadingRow: loading.row,
       spinner: loading.spinner,
       loadingLabel: loading.label,

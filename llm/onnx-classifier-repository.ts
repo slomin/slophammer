@@ -3,8 +3,6 @@ import {
   argmax4,
   bucketFromArgmax,
   softmax,
-  VERDICT_HEADLINE,
-  VERDICT_PRIMARY_LABEL,
   type ClassifyResult,
   type RawProbs,
 } from './classify-result'
@@ -16,29 +14,35 @@ import {
   type TensorFactory,
   type TokenizerLike,
 } from './onnx-deps'
+import type { RuntimeContract } from './runtime-contract'
 import { padInputIds } from './token-preparation'
-
-const DEFAULT_OUTPUT_NAME = 'logits'
-const DEFAULT_PAD_SIDE = 'left' as const
 
 export interface OnnxClassifierDeps {
   tokenizer: TokenizerLike
   session: InferenceSessionLike
   contract: SlopHammerContract
   createTensor: TensorFactory
+  /**
+   * pad id, padding side and output name, resolved up front from the contract
+   * or another authoritative source. Never defaulted — see #10.
+   */
+  runtime: RuntimeContract
 }
 
 export class OnnxClassifierRepository implements ClassifierRepository {
   constructor(private readonly deps: OnnxClassifierDeps) {}
 
+  async dispose(): Promise<void> {
+    await this.deps.session.release?.()
+  }
+
   async classify(text: string): Promise<ClassifyResult> {
-    const { tokenizer, session, contract, createTensor } = this.deps
+    const { tokenizer, session, contract, createTensor, runtime } = this.deps
     const maxSeq = contract.max_seq_length
-    const padId = BigInt(tokenizer.pad_token_id ?? contract.pad_token_id ?? 0)
-    const padSide = contract.padding_side ?? DEFAULT_PAD_SIDE
+    const { padId, padSide } = runtime
 
     const enc = tokenizer(text, { add_special_tokens: true })
-    const { inputIds, attnMask, origLen, truncated } = padInputIds({
+    const { inputIds, attnMask, origLen, seqLen, truncated } = padInputIds({
       tokens: enc.input_ids.data,
       maxSeq,
       padId,
@@ -53,7 +57,7 @@ export class OnnxClassifierRepository implements ClassifierRepository {
       attention_mask: attnTensor,
     })
 
-    const outputName = contract.output_name ?? DEFAULT_OUTPUT_NAME
+    const outputName = runtime.outputName
     const logitsTensor = outputs[outputName]
     if (!logitsTensor) {
       throw new Error(
@@ -73,14 +77,9 @@ export class OnnxClassifierRepository implements ClassifierRepository {
         probs,
         rawPct: [probs[0] * 100, probs[1] * 100, probs[2] * 100, probs[3] * 100],
         aiScore: 1 - probs[0],
-        humanPct: verdict === 'human' ? 100 : 0,
-        mixedPct: verdict === 'mixed' ? 100 : 0,
-        aiPct: verdict === 'ai' ? 100 : 0,
         verdict,
-        primaryPct: 100,
-        primaryLabel: VERDICT_PRIMARY_LABEL[verdict],
-        headline: VERDICT_HEADLINE[verdict],
         tokenCount: origLen,
+        analysedTokens: seqLen,
         truncated,
       }
     } finally {
