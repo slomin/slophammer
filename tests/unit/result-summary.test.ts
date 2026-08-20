@@ -2,72 +2,39 @@ import { describe, expect, it } from 'vitest'
 import { formatResultSummary } from '@/content/result-summary'
 import type { ClassifyResult } from '@/llm/classify-result'
 
-const aiResult: ClassifyResult = {
-  probs: [0.05, 0.1, 0.15, 0.7],
-  rawPct: [5, 10, 15, 70],
-  aiScore: 0.95,
-  verdict: 'ai',
-  tokenCount: 40,
-  analysedTokens: 40,
-  truncated: false,
+const result: ClassifyResult = {
+  probs: [0.1, 0.2, 0.3, 0.4],
+  rawPct: [10, 20, 30, 40],
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 1.94591,
+  threshold: 3.8088,
+  verdict: 'near-threshold',
+  tokenCount: 600,
+  analysedTokens: 512,
+  truncated: true,
 }
 
 describe('formatResultSummary', () => {
-  it('leads with the verdict, percentage and confidence', () => {
-    const lines = formatResultSummary(aiResult).split('\n')
-    expect(lines[0]).toBe('Slop Hammer: AI 90% (HIGH CONFIDENCE)')
+  it('exports only the detector heading and raw distribution', () => {
+    const summary = formatResultSummary(result)
+    expect(summary).toBe([
+      'SlopHammer: AI Content Detector',
+      'Distribution: Human 10% · Lightly AI 20% · Moderately AI 30% · Fully AI 40%',
+    ].join('\n'))
   })
 
-  it('includes the plain-language sentence', () => {
-    expect(formatResultSummary(aiResult)).toContain('Likely AI-generated')
-  })
-
-  it('includes the human/AI split', () => {
-    expect(formatResultSummary(aiResult)).toContain('Human 10% · AI 90%')
-  })
-
-  it('includes the four-bucket distribution with its labels', () => {
-    const summary = formatResultSummary(aiResult)
-    expect(summary).toContain('Human 5%')
-    expect(summary).toContain('Light AI 10%')
-    expect(summary).toContain('Heavy AI 15%')
-    expect(summary).toContain('Full AI 70%')
-  })
-
-  it('notes truncation when part of the selection was not analysed', () => {
+  it('preserves fractional bucket percentages without appending verdict metadata', () => {
     const summary = formatResultSummary({
-      ...aiResult,
-      truncated: true,
-      tokenCount: 1141,
-      analysedTokens: 512,
+      ...result,
+      probs: [0.014, 0.0196, 0.032, 0.9344],
+      rawPct: [1.4, 1.96, 3.2, 93.44],
+      extLlr: 4.2054,
+      verdict: 'flagged',
     })
-    expect(summary).toContain('Analysed the last 512 of 1,141 tokens')
-  })
-
-  it('omits the truncation line when nothing was dropped', () => {
-    expect(formatResultSummary(aiResult)).not.toMatch(/Analysed the last/)
-  })
-
-  it('describes a human-leaning result from the human side', () => {
-    const human: ClassifyResult = {
-      ...aiResult,
-      probs: [0.92, 0.05, 0.02, 0.01],
-      rawPct: [92, 5, 2, 1],
-      aiScore: 0.08,
-      verdict: 'human',
-    }
-    const summary = formatResultSummary(human)
-    expect(summary.split('\n')[0]).toMatch(/^Slop Hammer: HUMAN 9\d% \(HIGH CONFIDENCE\)$/)
-    expect(summary).toContain('Likely human-written')
-  })
-
-  it('rounds the split so the two halves add to 100', () => {
-    const summary = formatResultSummary({
-      ...aiResult,
-      probs: [0.5, 0.0, 0.0, 0.5],
-      rawPct: [50, 0, 0, 50],
-    })
-    const m = /Human (\d+)% · AI (\d+)%/.exec(summary)!
-    expect(Number(m[1]) + Number(m[2])).toBe(100)
+    expect(summary).toBe([
+      'SlopHammer: AI Content Detector',
+      'Distribution: Human 1.4% · Lightly AI 2.0% · Moderately AI 3.2% · Fully AI 93.4%',
+    ].join('\n'))
+    expect(summary).not.toMatch(/AI SIGNAL|Model estimate|Decision score|Threshold/)
   })
 })

@@ -55,13 +55,17 @@ export class OpfsWriter implements OpfsAdapterLike {
   }
 }
 
-export async function wipeModel(): Promise<void> {
+export async function wipeModelFiles(): Promise<void> {
   const root = await navigator.storage.getDirectory()
   try {
     await root.removeEntry(MODEL_ROOT_DIR, { recursive: true })
-  } catch {
-    // nothing to clean
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name !== 'NotFoundError') throw err
   }
+}
+
+export async function wipeModel(): Promise<void> {
+  await wipeModelFiles()
   await chrome.storage.local.remove(['model_installed', 'checkpoint_id'])
 }
 

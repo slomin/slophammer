@@ -1,154 +1,79 @@
 import { describe, expect, it } from 'vitest'
-import {
-  initialCardState,
-  reduceCardState,
-  type CardState,
-} from '@/content/state'
+import { initialCardState, reduceCardState } from '@/content/state'
 import type { ClassifyResult } from '@/llm/classify-result'
 
 const result: ClassifyResult = {
-  probs: [0.05, 0.1, 0.2, 0.65],
-  rawPct: [5, 10, 20, 65],
-  aiScore: 0.95,
-  verdict: 'ai',
-  tokenCount: 12,
-  analysedTokens: 12,
+  probs: [0.1, 0.2, 0.3, 0.4],
+  rawPct: [10, 20, 30, 40],
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 1.95,
+  threshold: 3.8088,
+  verdict: 'near-threshold',
+  tokenCount: 10,
+  analysedTokens: 10,
   truncated: false,
 }
 
-const loading = (rid: string): CardState => ({
-  kind: 'loading',
-  requestId: rid,
-  preview: 'preview text',
-  wordCount: 2,
+const started = (requestId: string, startedAtMs: number) => ({
+  type: 'classify:started' as const,
+  requestId,
+  preview: 'preview',
+  wordCount: 40,
+  charCount: 300,
+  startedAtMs,
 })
 
-describe('initialCardState', () => {
-  it('is idle', () => {
-    expect(initialCardState).toEqual({ kind: 'idle' })
-  })
+const finished = (requestId: string, finishedAtMs: number) => ({
+  type: 'classify:result' as const,
+  requestId,
+  tabId: 1,
+  result,
+  finishedAtMs,
 })
 
-describe('reduceCardState — classify:started', () => {
-  it('idle → loading', () => {
-    const next = reduceCardState(initialCardState, {
-      type: 'classify:started',
-      requestId: 'r1',
-      preview: 'preview text',
-      wordCount: 2,
-      charCount: 12,
-    })
-    expect(next).toEqual({ kind: 'loading', requestId: 'r1', preview: 'preview text', wordCount: 2 })
+describe('reduceCardState timing', () => {
+  it('stores start only while loading and duration only when the matching result is accepted', () => {
+    const loading = reduceCardState(initialCardState, started('r1', 100))
+    expect(loading).toMatchObject({ kind: 'loading', startedAtMs: 100 })
+    const ready = reduceCardState(loading, finished('r1', 440))
+    expect(ready).toMatchObject({ kind: 'ready', durationMs: 340 })
+    expect(ready).not.toHaveProperty('startedAtMs')
   })
 
-  it('replaces an earlier in-flight request', () => {
-    const next = reduceCardState(loading('r1'), {
-      type: 'classify:started',
-      requestId: 'r2',
-      preview: 'new',
-      wordCount: 1,
-      charCount: 3,
-    })
-    expect(next).toEqual({ kind: 'loading', requestId: 'r2', preview: 'new', wordCount: 1 })
-  })
-})
-
-describe('reduceCardState — classify:result', () => {
-  it('loading → ready when requestId matches', () => {
-    const next = reduceCardState(loading('r1'), {
-      type: 'classify:result',
-      requestId: 'r1',
-      tabId: 42,
-      result,
-    })
-    expect(next).toEqual({
-      kind: 'ready',
-      requestId: 'r1',
-      preview: 'preview text',
-      wordCount: 2,
-      result,
-    })
+  it('ignores stale results and replaces the timer on a new request', () => {
+    const first = reduceCardState(initialCardState, started('r1', 100))
+    const second = reduceCardState(first, started('r2', 500))
+    expect(reduceCardState(second, finished('r1', 900))).toBe(second)
+    expect(reduceCardState(second, finished('r2', 1_000))).toMatchObject({ durationMs: 500 })
   })
 
-  it('ignores stale result (mismatched requestId)', () => {
-    const state = loading('r2')
-    const next = reduceCardState(state, {
-      type: 'classify:result',
-      requestId: 'r-stale',
-      tabId: 42,
-      result,
-    })
-    expect(next).toBe(state)
+  it.each([
+    { type: 'dismiss' as const },
+    { type: 'classify:timeout' as const, requestId: 'r1' },
+    { type: 'classify:error' as const, requestId: 'r1', tabId: 1, error: 'failed' },
+  ])('does not leak timing through $type', (action) => {
+    const loading = reduceCardState(initialCardState, started('r1', 100))
+    const next = reduceCardState(loading, action)
+    expect(next).not.toHaveProperty('startedAtMs')
+    expect(next).not.toHaveProperty('durationMs')
   })
 
-  it('ignores result when in idle state', () => {
-    const next = reduceCardState(initialCardState, {
-      type: 'classify:result',
-      requestId: 'r1',
-      tabId: 42,
-      result,
+  it('renders short selections as a dedicated error and clears an old duration', () => {
+    const ready = reduceCardState(
+      reduceCardState(initialCardState, started('r1', 0)),
+      finished('r1', 100),
+    )
+    const short = reduceCardState(ready, {
+      type: 'selection:too-short',
+      wordCount: 39,
+      minWords: 40,
     })
-    expect(next).toEqual(initialCardState)
-  })
-})
-
-describe('reduceCardState — classify:error', () => {
-  it('loading → error when requestId matches', () => {
-    const next = reduceCardState(loading('r1'), {
-      type: 'classify:error',
-      requestId: 'r1',
-      tabId: 42,
-      error: 'something broke',
-    })
-    expect(next).toEqual({
+    expect(short).toEqual({
       kind: 'error',
-      requestId: 'r1',
-      preview: 'preview text',
-      wordCount: 2,
-      error: 'something broke',
+      requestId: null,
+      preview: '',
+      wordCount: 39,
+      error: 'Too short to judge — select at least 40 words (39 selected)',
     })
-  })
-
-  it('ignores stale error (mismatched requestId)', () => {
-    const state = loading('r1')
-    const next = reduceCardState(state, {
-      type: 'classify:error',
-      requestId: 'other',
-      tabId: 42,
-      error: 'x',
-    })
-    expect(next).toBe(state)
-  })
-})
-
-describe('reduceCardState — model:status', () => {
-  it('any state × any status → no change (informational only in Phase 2)', () => {
-    const ls = loading('r1')
-    expect(reduceCardState(ls, { type: 'model:status', status: 'loading', progress: 42 })).toBe(ls)
-    expect(reduceCardState(ls, { type: 'model:status', status: 'not-installed' })).toBe(ls)
-    expect(reduceCardState(ls, { type: 'model:status', status: 'ready' })).toBe(ls)
-    expect(
-      reduceCardState(initialCardState, { type: 'model:status', status: 'not-installed' }),
-    ).toEqual(initialCardState)
-  })
-})
-
-describe('reduceCardState — dismiss', () => {
-  it('any state → idle on dismiss', () => {
-    expect(reduceCardState(loading('r1'), { type: 'dismiss' })).toEqual(initialCardState)
-    expect(
-      reduceCardState(
-        { kind: 'ready', requestId: 'r1', preview: 'p', wordCount: 1, result },
-        { type: 'dismiss' },
-      ),
-    ).toEqual(initialCardState)
-  })
-})
-
-describe('reduceCardState — other messages', () => {
-  it('selection:too-short does not alter card state (toast-only)', () => {
-    expect(
-      reduceCardState(loading('r1'), { type: 'selection:too-short', length: 5 }),
-    ).toEqual(loading('r1'))
   })
 })

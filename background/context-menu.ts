@@ -1,19 +1,11 @@
 import type { ClassifyRunMessage, ClassifyStartedMessage, SelectionTooShortMessage } from '@/messaging/protocol'
+export { MIN_SELECTION_WORDS, countWords, isSelectionLongEnough } from '@/llm/input-policy'
+import { MIN_SELECTION_WORDS, countWords, isSelectionLongEnough } from '@/llm/input-policy'
+import { PRODUCT_NAME } from '@/shared/product'
 
-export const MIN_SELECTION_CHARS = 75
 export const PREVIEW_MAX_CHARS = 200
 const MENU_ID = 'slop-hammer:classify'
-const MENU_TITLE = 'Check with Slop Hammer'
-
-export function countWords(text: string): number {
-  const trimmed = text.trim()
-  if (trimmed.length === 0) return 0
-  return trimmed.split(/\s+/).length
-}
-
-export function isSelectionLongEnough(text: string): boolean {
-  return text.trim().length >= MIN_SELECTION_CHARS
-}
+const MENU_TITLE = `Check with ${PRODUCT_NAME}`
 
 export function buildStartedMessage(args: {
   requestId: string
@@ -71,19 +63,19 @@ export async function handleMenuClick(deps: ContextMenuDeps, info: MenuClickInfo
   const text = (info.selectionText ?? '').trim()
   const tooShort = !isSelectionLongEnough(text)
 
-  // Reachability is still checked before anything is sent — a toast into a tab
-  // with no content script is the silent failure this exists to prevent — but a
-  // selection we are about to reject does not justify injecting the bundle, so
-  // that case only probes.
-  if (!(await deps.ensureContentScript(tabId, { inject: !tooShort }))) {
+  // Reachability is checked before anything is sent. Even a short selection
+  // needs on-demand injection: otherwise a tab that predates installation or
+  // an extension reload cannot show the promised rejection card.
+  if (!(await deps.ensureContentScript(tabId, { inject: true }))) {
     deps.logger.warn('no content script in tab', { tabId, tooShort })
     deps.onUnreachable(tabId)
     return
   }
 
   if (tooShort) {
-    deps.logger.warn('selection too short', { length: text.length })
-    deps.sendToTab(tabId, { type: 'selection:too-short', length: text.length })
+    const wordCount = countWords(text)
+    deps.logger.info('selection too short', { wordCount })
+    deps.sendToTab(tabId, { type: 'selection:too-short', wordCount, minWords: MIN_SELECTION_WORDS })
     return
   }
 

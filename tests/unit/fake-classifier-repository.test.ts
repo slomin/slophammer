@@ -24,14 +24,16 @@ describe('FakeClassifierRepository', () => {
       }
     })
 
-    it('aiScore equals 1 - probs[0]', async () => {
+    it('returns the calibrated score, threshold and contract labels', async () => {
       const r = await repo.classify('any text at all')
-      expect(r.aiScore).toBeCloseTo(1 - r.probs[0]!, 10)
+      expect(Number.isFinite(r.extLlr)).toBe(true)
+      expect(r.threshold).toBe(3.8088)
+      expect(r.bucketLabels).toEqual(RAW_CLASS_LABEL)
     })
 
-    it('verdict is one of the three buckets', async () => {
+    it('verdict is one of the calibrated classes', async () => {
       const r = await repo.classify('longer sample text for classifier fake')
-      expect(['human', 'mixed', 'ai']).toContain(r.verdict)
+      expect(['flagged', 'near-threshold', 'not-flagged']).toContain(r.verdict)
       expect(RAW_CLASS_LABEL.length).toBe(4)
     })
 

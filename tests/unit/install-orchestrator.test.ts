@@ -10,9 +10,16 @@ import {
 const VALID_CONTRACT = {
   n_buckets: 4,
   max_seq_length: 512,
+  preprocessing: 'trim+zw',
+  calibration: { tau: 3.8088, abstain_band: 1.5 },
+  labels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
   lo_threshold: 0.1,
   hi_threshold: 0.9,
-  version: 'ckpt4500',
+  version: 'SlopHammer 350M v0.1',
+  base_model: 'LiquidAI/LFM2.5-350M-Base',
+  pad_token_id: 0,
+  padding_side: 'left',
+  output_name: 'logits',
 }
 
 function entry(name: string, data: Uint8Array | string): ZipEntry {
@@ -93,16 +100,16 @@ describe('runInstall — happy path', () => {
       onProgress: progress,
     })
 
-    expect(contract.version).toBe('ckpt4500')
+    expect(contract.version).toBe('SlopHammer 350M v0.1')
     expect(files.has('tokenizer.json')).toBe(true)
     expect(files.has('model_q4f16.onnx')).toBe(true)
     expect(files.has('slop_hammer_contract.json')).toBe(true)
     expect(getResetCalls()).toBe(1)
     expect(getSentinel()).not.toBeNull()
     const parsed = JSON.parse(getSentinel()!)
-    expect(parsed.checkpointId).toBe('ckpt4500')
+    expect(parsed.checkpointId).toBe('SlopHammer 350M v0.1')
     expect(parsed.contractFile).toBe('slop_hammer_contract.json')
-    expect(marks.calls).toContain('setInstalled:ckpt4500')
+    expect(marks.calls).toContain('setInstalled:SlopHammer 350M v0.1')
     expect(marks.calls).toContain('persistStorage')
     expect(progress).toHaveBeenCalled()
   })
@@ -134,17 +141,17 @@ describe('runInstall — happy path', () => {
       marks,
       onProgress: () => {},
       hostedMeta: {
-        filename: 'slop_hammer_0_8b_v0_1.zip',
-        lfsOid: 'abc123',
-        url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+        filename: 'slophammer_350m_v0_1.zip',
+        lfsOid: '3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e',
+        url: 'https://huggingface.co/Slomin/slophammer_350m/resolve/main/slophammer_350m_v0_1.zip',
       },
     })
     const parsed = JSON.parse(getSentinel()!)
     expect(parsed.source).toBe('hosted')
     expect(parsed.hosted).toEqual({
-      filename: 'slop_hammer_0_8b_v0_1.zip',
-      lfsOid: 'abc123',
-      url: 'https://huggingface.co/Slomin/slop_hammer_0_8_b/resolve/main/slop_hammer_0_8b_v0_1.zip',
+      filename: 'slophammer_350m_v0_1.zip',
+      lfsOid: '3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e',
+      url: 'https://huggingface.co/Slomin/slophammer_350m/resolve/main/slophammer_350m_v0_1.zip',
     })
   })
 
@@ -167,7 +174,7 @@ describe('runInstall — happy path', () => {
     const marks = makeStorage()
     const entries = requiredHappyEntries
       .filter((e) => e.name !== 'slop_hammer_contract.json')
-      .concat(entry('seq_cls_contract.json', JSON.stringify({ ...VALID_CONTRACT, version: 'alt' })))
+      .concat(entry('seq_cls_contract.json', JSON.stringify(VALID_CONTRACT)))
     await runInstall({
       reader: makeZip(entries),
       opfs,

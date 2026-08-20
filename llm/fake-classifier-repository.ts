@@ -1,7 +1,7 @@
 import type { ClassifierRepository } from './classifier-repository'
 import {
-  argmax4,
-  bucketFromArgmax,
+  computeExtLlr,
+  decideVerdict,
   softmax,
   type ClassifyResult,
   type RawProbs,
@@ -46,12 +46,15 @@ export class FakeClassifierRepository implements ClassifierRepository {
       probs[2] * 100,
       probs[3] * 100,
     ]
-    const verdict = bucketFromArgmax(argmax4(probs))
+    const extLlr = computeExtLlr(probs)
+    const threshold = 3.8088
+    const verdict = decideVerdict(extLlr, threshold, 1.5)
     return {
       probs,
       rawPct,
-      aiScore: 1 - probs[0],
-
+      bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+      extLlr,
+      threshold,
       verdict,
 
       tokenCount: tokenEstimate(text),

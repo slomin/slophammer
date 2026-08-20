@@ -1,9 +1,10 @@
 import { CARD_STYLES } from './styles'
 import { ADVANCED_DRAWER_LABELS } from './verdict'
+import { PRODUCT_NAME } from '@/shared/product'
 
 export const CARD_HOST_ATTR = 'data-slop-hammer-card'
 export const CARD_HOST_SELECTOR = `[${CARD_HOST_ATTR}]`
-export const CARD_VERSION = 'v1.0'
+export const CARD_VERSION = 'v1.0.0'
 
 export interface AdvancedRowRefs {
   root: HTMLElement
@@ -38,6 +39,7 @@ export interface CardRefs {
   modeToggle: HTMLButtonElement
   advanced: HTMLElement
   advancedRows: [AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs]
+  analysisTime: HTMLElement
   errorBox: HTMLElement
   errorTitle: HTMLElement
   errorMessage: HTMLElement
@@ -77,7 +79,7 @@ function buildHead(): { head: HTMLElement; brand: HTMLElement; version: HTMLElem
 
   const brand = el<HTMLSpanElement>('span', { className: 'sh-brand', testId: 'head-brand' })
   brand.appendChild(el<HTMLSpanElement>('span', { className: 'sh-mark' }))
-  brand.appendChild(document.createTextNode('Slop Hammer '))
+  brand.appendChild(document.createTextNode(`${PRODUCT_NAME} `))
   const version = el<HTMLSpanElement>('span', { className: 'ver', testId: 'head-version', text: CARD_VERSION })
   brand.appendChild(version)
 
@@ -218,7 +220,11 @@ function buildAdvancedRow(index: 0 | 1 | 2 | 3, label: string): AdvancedRowRefs 
   return { root, name, fill, pct }
 }
 
-function buildAdvanced(): { drawer: HTMLElement; rows: [AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs] } {
+function buildAdvanced(): {
+  drawer: HTMLElement
+  rows: [AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs, AdvancedRowRefs]
+  time: HTMLElement
+} {
   const drawer = el<HTMLDivElement>('div', { className: 'sh-advanced hide', testId: 'advanced' })
   const head = el<HTMLDivElement>('div', { className: 'adv-head' })
   head.appendChild(el<HTMLSpanElement>('span', { text: 'distribution' }))
@@ -230,10 +236,14 @@ function buildAdvanced(): { drawer: HTMLElement; rows: [AdvancedRowRefs, Advance
     buildAdvancedRow(2, ADVANCED_DRAWER_LABELS[2]),
     buildAdvancedRow(3, ADVANCED_DRAWER_LABELS[3]),
   ]
-  for (const r of rows) stack.appendChild(r.root)
+  for (const row of rows) stack.appendChild(row.root)
+  const metadata = el<HTMLDivElement>('div', { className: 'adv-meta', testId: 'advanced-metadata' })
+  const time = el<HTMLSpanElement>('span', { testId: 'analysis-time' })
+  metadata.appendChild(time)
   drawer.appendChild(head)
   drawer.appendChild(stack)
-  return { drawer, rows }
+  drawer.appendChild(metadata)
+  return { drawer, rows, time }
 }
 
 function buildError(): { box: HTMLElement; title: HTMLElement; message: HTMLElement } {
@@ -292,7 +302,7 @@ export function buildCard(): CardElements {
   const root = el<HTMLDivElement>('div', {
     className: 'sh-card dark',
     testId: 'card-root',
-    attrs: { role: 'region', 'aria-label': 'Slop Hammer result' },
+    attrs: { role: 'region', 'aria-label': `${PRODUCT_NAME} result` },
   })
   root.dataset.state = 'idle'
   root.dataset.view = 'full'
@@ -348,6 +358,7 @@ export function buildCard(): CardElements {
       modeToggle: mode.toggle,
       advanced: advanced.drawer,
       advancedRows: advanced.rows,
+      analysisTime: advanced.time,
       errorBox: error.box,
       errorTitle: error.title,
       errorMessage: error.message,

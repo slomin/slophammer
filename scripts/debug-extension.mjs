@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Drive and inspect a running Slop Hammer install over raw CDP.
+// Drive and inspect a running SlopHammer install over raw CDP.
 //
 // Requires a browser started by `pnpm qa` (or `pnpm chrome`), which exposes CDP
 // on :9222 and serves the fixtures on :8765.
 //
 //   node scripts/debug-extension.mjs status
-//   node scripts/debug-extension.mjs classify "some text of at least 75 chars…"
+//   node scripts/debug-extension.mjs classify "some text of at least 40 words…"
 //   node scripts/debug-extension.mjs classify --section 1
 //   node scripts/debug-extension.mjs logs [seconds]
 //   node scripts/debug-extension.mjs reach          # content-script reachability
@@ -168,7 +168,7 @@ export const CARD_SNAPSHOT = `(() => {
   return {mounted:true,state:root.dataset.state,mode:root.dataset.mode,
     verdict:s.querySelector('[data-testid="verdict-label"]')?.textContent?.trim()||null,
     percent:s.querySelector('[data-testid="verdict-big"]')?.textContent?.trim()||null,
-    confidence:s.querySelector('[data-testid="verdict-confidence"]')?.textContent?.trim()||null,
+    detail:s.querySelector('[data-testid="verdict-text"]')?.textContent?.trim()||null,
     truncation:s.querySelector('[data-testid="truncation-note"]')?.textContent?.trim()||null,
     error:s.querySelector('[data-testid="error-message"]')?.textContent?.trim()||null,
     buckets:[0,1,2,3].map(i=>s.querySelector('[data-testid="raw-'+i+'"]')?.querySelector('.fill')?.dataset.pct??null),
@@ -275,8 +275,9 @@ async function cmdClassify(args) {
   } else {
     text = args.filter((a) => !a.startsWith('--')).join(' ')
   }
-  if (!text || text.trim().length < 75) {
-    return say(`text is ${text ? text.trim().length : 0} chars; the extension requires 75+`)
+  const wordCount = text?.trim() ? text.trim().split(/\s+/).length : 0
+  if (wordCount < 40) {
+    return say(`text has ${wordCount} words; the extension requires 40+`)
   }
 
   // Ask the page itself where it is, so the tab we message is the tab we just

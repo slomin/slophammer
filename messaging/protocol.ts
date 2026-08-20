@@ -1,4 +1,5 @@
 import type { ClassifyResult } from '@/llm/classify-result'
+import type { MigrationState } from '@/migration/state'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type LogSource = 'background' | 'content' | 'offscreen' | 'options' | 'inspector'
@@ -19,7 +20,8 @@ export interface PingMessage {
 
 export interface SelectionTooShortMessage {
   type: 'selection:too-short'
-  length: number
+  wordCount: number
+  minWords: number
 }
 
 export interface ClassifyStartedMessage {
@@ -68,6 +70,34 @@ export interface ModelInstalledMessage {
   type: 'model:installed'
 }
 
+export interface MigrationStartMessage {
+  type: 'migration:start' | 'migration:resume'
+}
+
+export interface MigrationRequestResumeMessage {
+  type: 'migration:request-resume'
+}
+
+export interface MigrationStorageClearRequestMessage {
+  type: 'migration:storage-clear-request'
+}
+
+export type MigrationStorageOperation =
+  | 'model-marker'
+  | 'existing-complete'
+  | 'restore-defaults'
+
+export interface MigrationStorageWriteRequestMessage {
+  type: 'migration:storage-write-request'
+  operation: MigrationStorageOperation
+  checkpointId?: string
+}
+
+export interface MigrationStatusMessage {
+  type: 'migration:status'
+  state: MigrationState
+}
+
 export type ExtensionMessage =
   | LogMessage
   | PingMessage
@@ -79,6 +109,11 @@ export type ExtensionMessage =
   | ModelLoadMessage
   | ModelStatusMessage
   | ModelInstalledMessage
+  | MigrationStartMessage
+  | MigrationRequestResumeMessage
+  | MigrationStorageClearRequestMessage
+  | MigrationStorageWriteRequestMessage
+  | MigrationStatusMessage
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null
@@ -109,7 +144,21 @@ export function isClassifyStarted(m: unknown): m is ClassifyStartedMessage {
 }
 
 export function isClassifyResult(m: unknown): m is ClassifyResultMessage {
-  return hasType(m, 'classify:result')
+  if (!hasType(m, 'classify:result')) return false
+  const value = m as Record<string, unknown>
+  const result = value.result
+  if (!isRecord(result)) return false
+  const verdict = result.verdict
+  return (
+    typeof value.requestId === 'string' &&
+    typeof value.tabId === 'number' &&
+    Array.isArray(result.probs) && result.probs.length === 4 && result.probs.every((v) => typeof v === 'number') &&
+    Array.isArray(result.rawPct) && result.rawPct.length === 4 && result.rawPct.every((v) => typeof v === 'number') &&
+    Array.isArray(result.bucketLabels) && result.bucketLabels.length === 4 && result.bucketLabels.every((v) => typeof v === 'string') &&
+    typeof result.extLlr === 'number' &&
+    typeof result.threshold === 'number' &&
+    (verdict === 'flagged' || verdict === 'near-threshold' || verdict === 'not-flagged')
+  )
 }
 
 export function isClassifyError(m: unknown): m is ClassifyErrorMessage {

@@ -1,8 +1,7 @@
 import { test, expect, gotoHtml } from './fixtures'
 
 const LONG_TEXT =
-  'The quick brown fox jumps over the lazy dog. ' +
-  'This pangram must exceed seventy-five characters to satisfy the minimum-selection rule.'
+  Array.from({ length: 40 }, (_, index) => `supported-word-${index + 1}`).join(' ')
 const CARD_HOST_SELECTOR = '[data-slop-hammer-card]'
 const HOSTILE_PAGE_HEAD = '<style>:not(:defined) { visibility: hidden; }</style>'
 
@@ -14,8 +13,10 @@ const HOSTILE_PAGE_HEAD = '<style>:not(:defined) { visibility: hidden; }</style>
 const SYNTHETIC_RESULT = {
   probs: [0.05, 0.1, 0.15, 0.7],
   rawPct: [5, 10, 15, 70],
-  aiScore: 0.95,
-  verdict: 'ai',
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 4.2,
+  threshold: 3.8088,
+  verdict: 'flagged',
   tokenCount: 40,
   analysedTokens: 40,
   truncated: false,
@@ -105,21 +106,25 @@ test('content script renders result card on classify dispatch', async ({ context
     const q = (id: string) => s.querySelector<HTMLElement>(`[data-testid="${id}"]`)
     return {
       verdictLabel: q('verdict-label')?.textContent ?? null,
+      verdictConfidence: q('verdict-confidence')?.textContent ?? null,
       verdictBig: q('verdict-big')?.textContent ?? null,
       verdictSide: q('verdict-box')?.dataset.verdict ?? null,
-      rawPcts: [0, 1, 2, 3].map((i) => q(`raw-${i}`)?.querySelector<HTMLElement>('.fill')?.dataset.pct ?? null),
+      verdictText: q('verdict-text')?.textContent ?? null,
+      cardText: q('card-root')?.textContent ?? null,
       headVersion: q('head-version')?.textContent ?? null,
     }
   })
 
-  expect(['HUMAN', 'AI', 'HUMAN-LEANING', 'AI-LEANING']).toContain(snapshot.verdictLabel)
-  expect(snapshot.verdictBig).toMatch(/^\d+$/)
-  expect(['human', 'ai']).toContain(snapshot.verdictSide)
-  expect(snapshot.rawPcts.every((v) => v !== null && /^\d+$/.test(v!))).toBe(true)
-  expect(snapshot.headVersion).toBe('v1.0')
+  expect(snapshot.verdictLabel).toBe('AI')
+  expect(snapshot.verdictConfidence).toBe('HIGH CONFIDENCE')
+  expect(snapshot.verdictBig).toBe('90')
+  expect(snapshot.verdictText).toBe('Likely AI-generated')
+  expect(snapshot.cardText).not.toMatch(/Model estimate|not proof of authorship/i)
+  expect(snapshot.verdictSide).toBe('ai')
+  expect(snapshot.headVersion).toBe('v1.0.0')
 })
 
-test('advanced toggle expands the 4-bucket drawer', async ({ context }) => {
+test('advanced toggle expands raw distribution and analysis time only', async ({ context }) => {
   const page = await context.newPage()
   await gotoHtml(page, `<p id="t">${LONG_TEXT}</p>`)
   await page.waitForLoadState('domcontentloaded')
@@ -139,6 +144,73 @@ test('advanced toggle expands the 4-bucket drawer', async ({ context }) => {
     el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.mode ?? null,
   )
   expect(mode).toBe('advanced')
+  await expect.poll(() => card.evaluate((el) => {
+    const advanced = el.shadowRoot?.querySelector<HTMLElement>('[data-testid="advanced"]')
+    return advanced ? getComputedStyle(advanced).opacity : null
+  })).toBe('1')
+  const advanced = await card.evaluate((el) => {
+    const s = el.shadowRoot!
+    const q = (id: string) => s.querySelector<HTMLElement>(`[data-testid="${id}"]`)
+    return {
+      visible: q('advanced') ? getComputedStyle(q('advanced')!).opacity : null,
+      time: q('analysis-time')?.textContent,
+      text: q('advanced')?.textContent,
+      labels: [0, 1, 2, 3].map((i) => q(`raw-${i}`)?.querySelector('.name')?.textContent),
+      pcts: [0, 1, 2, 3].map((i) => q(`raw-${i}`)?.querySelector('.val')?.textContent),
+    }
+  })
+  expect(advanced.visible).toBe('1')
+  expect(advanced.time).toMatch(/^Analysis time (sub 0\.1s|\d+(?:\.\d+)?s)$/)
+  expect(advanced.labels).toEqual(['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'])
+  expect(advanced.pcts).toEqual(['5%', '10%', '15%', '70%'])
+  expect(advanced.text).not.toMatch(/Decision score|Threshold/)
+})
+
+test('39 words render the dedicated too-short state without inference', async ({ context }) => {
+  const page = await context.newPage()
+  await gotoHtml(page, `<p>${LONG_TEXT}</p>`)
+  const worker = await serviceWorkerFor(context)
+  const tabId = await tabIdFor(context, page)
+  await worker.evaluate(async (id) => {
+    for (let i = 0; i < 50; i++) {
+      try {
+        await chrome.tabs.sendMessage(id, { type: 'selection:too-short', wordCount: 39, minWords: 40 })
+        return
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+  }, tabId)
+  const card = page.locator(CARD_HOST_SELECTOR)
+  await expect(card).toBeAttached()
+  await expect.poll(() => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLElement>('[data-testid="error-message"]')?.textContent,
+  )).toBe('Too short to judge — select at least 40 words (39 selected)')
+})
+
+test('Copy and Share actions remain interactive', async ({ context }) => {
+  const page = await context.newPage()
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
+  })
+  await gotoHtml(page, `<p>${LONG_TEXT}</p>`)
+  const card = await dispatchClassification(context, page, LONG_TEXT)
+  await expect.poll(() => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLElement>('[data-testid="card-root"]')?.dataset.state,
+  )).toBe('ready')
+
+  await card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="btn-copy"]')?.click(),
+  )
+  await expect.poll(() => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="btn-copy"]')?.textContent,
+  )).toMatch(/Copied|Failed/)
+  await card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="btn-share"]')?.click(),
+  )
+  await expect.poll(() => card.evaluate((el) =>
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-testid="btn-share"]')?.textContent,
+  )).toMatch(/Copied|Failed/)
 })
 
 test('minimise collapses to head row and restores', async ({ context }) => {

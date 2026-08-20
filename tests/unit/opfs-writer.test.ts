@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OpfsWriter } from '@/install/opfs-writer'
+import { OpfsWriter, wipeModelFiles } from '@/install/opfs-writer'
 
 function domError(name: string): Error {
   const err = new Error(name)
@@ -52,5 +52,19 @@ describe('OpfsWriter.resetModelDir', () => {
       throw domError('NoModificationAllowedError')
     })
     await expect(new OpfsWriter().resetModelDir()).rejects.toThrow('NoModificationAllowedError')
+  })
+})
+
+describe('wipeModelFiles', () => {
+  it('deletes only OPFS data so it is safe in an offscreen document without chrome.storage', async () => {
+    const root = fakeStorage(async () => {})
+    const originalChrome = globalThis.chrome
+    Reflect.deleteProperty(globalThis, 'chrome')
+    try {
+      await expect(wipeModelFiles()).resolves.toBeUndefined()
+      expect(root.removeEntry).toHaveBeenCalledWith('slop-hammer', { recursive: true })
+    } finally {
+      Object.defineProperty(globalThis, 'chrome', { value: originalChrome, configurable: true })
+    }
   })
 })

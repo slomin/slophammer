@@ -11,8 +11,10 @@ const onnxClassifier: ClassifierRepository = {
   classify: vi.fn(async () => ({
     probs: [0.1, 0.2, 0.3, 0.4] as [number, number, number, number],
     rawPct: [10, 20, 30, 40] as [number, number, number, number],
-    aiScore: 0.9,
-    verdict: 'ai' as const,
+    bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'] as [string, string, string, string],
+    extLlr: 4.2,
+    threshold: 3.8088,
+    verdict: 'flagged' as const,
     tokenCount: 4,
     analysedTokens: 4,
     truncated: false,

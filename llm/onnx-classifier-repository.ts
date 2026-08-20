@@ -1,7 +1,7 @@
 import type { ClassifierRepository } from './classifier-repository'
 import {
-  argmax4,
-  bucketFromArgmax,
+  computeExtLlr,
+  decideVerdict,
   softmax,
   type ClassifyResult,
   type RawProbs,
@@ -41,7 +41,8 @@ export class OnnxClassifierRepository implements ClassifierRepository {
     const maxSeq = contract.max_seq_length
     const { padId, padSide } = runtime
 
-    const enc = tokenizer(text, { add_special_tokens: true })
+    const preparedText = preprocessClassifierText(text, contract.preprocessing)
+    const enc = tokenizer(preparedText, { add_special_tokens: true })
     const { inputIds, attnMask, origLen, seqLen, truncated } = padInputIds({
       tokens: enc.input_ids.data,
       maxSeq,
@@ -70,13 +71,16 @@ export class OnnxClassifierRepository implements ClassifierRepository {
       const logits = extractLogits(raw)
       const [p0, p1, p2, p3] = softmax(logits)
       const probs: RawProbs = [p0!, p1!, p2!, p3!]
-      const argmax = argmax4(probs)
-      const verdict = bucketFromArgmax(argmax)
+      const extLlr = computeExtLlr(probs)
+      const { tau, abstain_band: abstainBand } = contract.calibration
+      const verdict = decideVerdict(extLlr, tau, abstainBand)
 
       return {
         probs,
         rawPct: [probs[0] * 100, probs[1] * 100, probs[2] * 100, probs[3] * 100],
-        aiScore: 1 - probs[0],
+        bucketLabels: [...contract.labels] as [string, string, string, string],
+        extLlr,
+        threshold: tau,
         verdict,
         tokenCount: origLen,
         analysedTokens: seqLen,
@@ -86,4 +90,16 @@ export class OnnxClassifierRepository implements ClassifierRepository {
       logitsTensor.dispose?.()
     }
   }
+}
+
+const ZERO_WIDTH = /[\u200B\u200C\u200D\u2060\uFEFF]/g
+
+export function preprocessClassifierText(
+  text: string,
+  preprocessing: SlopHammerContract['preprocessing'],
+): string {
+  if (preprocessing !== 'trim+zw') {
+    throw new Error(`Unsupported preprocessing: ${String(preprocessing)}`)
+  }
+  return text.replace(ZERO_WIDTH, '').trim()
 }

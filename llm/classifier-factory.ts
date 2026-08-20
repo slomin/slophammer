@@ -2,7 +2,7 @@ import type { ClassifierRepository } from './classifier-repository'
 import type { ModelStatusMessage } from '@/messaging/protocol'
 
 export const MODEL_NOT_INSTALLED_MESSAGE =
-  'No model installed. Open Slop Hammer options to install the classifier.'
+  'No model installed. Open SlopHammer options to install the verified classifier.'
 
 /**
  * Raised when no real classifier can be produced. The caller must surface this

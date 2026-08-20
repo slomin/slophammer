@@ -105,10 +105,21 @@ describe('fetchZipWithProgress', () => {
       .mockResolvedValue(new Response('no', { status: 500, statusText: 'Server Error' }))
     const promise = fetchZipWithProgress({
       url: 'https://example.test/zip',
-      expectedSha256: 'x',
+      expectedSha256: '0'.repeat(64),
       onProgress: () => {},
       fetcher: fakeFetch as unknown as typeof fetch,
     })
     await expect(promise).rejects.toThrow(/500/)
+  })
+
+  it('never downloads with an empty or malformed checksum', async () => {
+    const fetcher = vi.fn()
+    await expect(fetchZipWithProgress({
+      url: 'https://example.test/zip',
+      expectedSha256: '',
+      onProgress: () => {},
+      fetcher,
+    })).rejects.toThrow(/pinned.*sha-256/i)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })

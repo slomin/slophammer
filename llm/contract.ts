@@ -1,20 +1,19 @@
+import { SUPPORTED_ARTIFACT } from './supported-artifact'
+
 export interface SlopHammerContract {
   n_buckets: number
   max_seq_length: number
-  /**
-   * Training-side calibration metadata, on a 0–1 scale. Nothing in the
-   * extension consumes these: the card's verdict comes from the argmax of the
-   * four buckets, and its HIGH/MED/LOW bands are presentation thresholds on a
-   * 0–100 collapsed percentage — a different quantity on a different scale.
-   * Applying 0.03 / 0.15 to that percentage would label almost everything AI.
-   * They are recorded when present but must not be treated as verdict
-   * thresholds without a model-side definition of what they threshold.
-   */
+  preprocessing: 'trim+zw'
+  calibration: {
+    tau: number
+    abstain_band: number
+  }
+  min_words?: number
   lo_threshold?: number
   hi_threshold?: number
   base_model?: string
   version?: string
-  labels?: string[]
+  labels: string[]
   pad_token_id?: number
   padding_side?: 'left' | 'right'
   session_count?: number
@@ -53,13 +52,67 @@ export function validateContract(c: unknown): asserts c is SlopHammerContract {
   if (typeof k.max_seq_length !== 'number' || k.max_seq_length < 1) {
     throw new Error(`Invalid max_seq_length: ${String(k.max_seq_length)}`)
   }
-  // Validated only when present. Requiring fields the runtime never reads
-  // rejected otherwise-valid models while protecting nothing; n_buckets and
-  // max_seq_length are the load-bearing checks.
+  if (k.preprocessing !== 'trim+zw') {
+    throw new Error(`Unsupported preprocessing: ${String(k.preprocessing)}`)
+  }
+  if (!Array.isArray(k.labels) || k.labels.length !== 4 || k.labels.some((v) => typeof v !== 'string')) {
+    throw new Error('Contract must declare exactly four bucket labels')
+  }
+  const calibration = k.calibration as Record<string, unknown> | null
+  if (!calibration || typeof calibration !== 'object') {
+    throw new Error('Contract calibration is missing')
+  }
+  if (typeof calibration.tau !== 'number' || !Number.isFinite(calibration.tau)) {
+    throw new Error(`Invalid calibration.tau: ${String(calibration.tau)}`)
+  }
+  if (
+    typeof calibration.abstain_band !== 'number' ||
+    !Number.isFinite(calibration.abstain_band) ||
+    calibration.abstain_band < 0
+  ) {
+    throw new Error(`Invalid calibration.abstain_band: ${String(calibration.abstain_band)}`)
+  }
+  if (k.min_words !== undefined && (!Number.isInteger(k.min_words) || (k.min_words as number) < 1)) {
+    throw new Error(`Invalid min_words: ${String(k.min_words)}`)
+  }
   if (k.lo_threshold !== undefined && typeof k.lo_threshold !== 'number') {
     throw new Error(`Invalid lo_threshold: ${String(k.lo_threshold)}`)
   }
   if (k.hi_threshold !== undefined && typeof k.hi_threshold !== 'number') {
     throw new Error(`Invalid hi_threshold: ${String(k.hi_threshold)}`)
+  }
+}
+
+export function validateSupportedContract(c: unknown): asserts c is SlopHammerContract {
+  validateContract(c)
+  if (c.version !== SUPPORTED_ARTIFACT.contractVersion) {
+    throw new Error(
+      `Unsupported model contract '${String(c.version)}'. Install ${SUPPORTED_ARTIFACT.contractVersion}.`,
+    )
+  }
+  if (c.base_model !== SUPPORTED_ARTIFACT.baseModel) {
+    throw new Error(
+      `Unsupported base model '${String(c.base_model)}'. Install ${SUPPORTED_ARTIFACT.contractVersion}.`,
+    )
+  }
+  if (
+    c.max_seq_length !== 512 ||
+    c.pad_token_id !== 0 ||
+    c.padding_side !== 'left' ||
+    c.output_name !== 'logits'
+  ) {
+    throw new Error('The model runtime contract does not match the supported 350M artifact.')
+  }
+  if (c.labels.some((label, index) => label !== SUPPORTED_ARTIFACT.labels[index])) {
+    throw new Error('The model bucket labels do not match the supported 350M artifact.')
+  }
+  if (
+    c.calibration.tau !== SUPPORTED_ARTIFACT.calibration.tau ||
+    c.calibration.abstain_band !== SUPPORTED_ARTIFACT.calibration.abstainBand
+  ) {
+    throw new Error('The model calibration does not match the supported 350M artifact.')
+  }
+  if (c.min_words !== undefined && c.min_words !== SUPPORTED_ARTIFACT.minWords) {
+    throw new Error(`Unsupported min_words=${c.min_words}; expected ${SUPPORTED_ARTIFACT.minWords}.`)
   }
 }

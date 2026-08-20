@@ -25,29 +25,56 @@ function formatMb(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1)
 }
 
-export function renderInstall(root: HTMLElement, state: InstallState, handlers: InstallHandlers): void {
+export interface InstallRenderOptions {
+  blocked?: boolean
+}
+
+export function renderInstall(
+  root: HTMLElement,
+  state: InstallState,
+  handlers: InstallHandlers,
+  options: InstallRenderOptions = {},
+): void {
   root.innerHTML = ''
   root.dataset.state = state.kind
+  root.dataset.blocked = String(Boolean(options.blocked))
+  root.toggleAttribute('inert', Boolean(options.blocked))
+
+  const activeHandlers: InstallHandlers = options.blocked
+    ? {
+        onInstallHosted() {}, onFile() {}, onWipe() {}, onRetry() {},
+        onCheckForUpdates() {}, onInstallUpdate() {}, onReplaceError() {},
+      }
+    : handlers
+
+  const append = (child: HTMLElement) => {
+    root.appendChild(child)
+    if (options.blocked) {
+      for (const control of root.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) {
+        control.disabled = true
+      }
+    }
+  }
 
   switch (state.kind) {
     case 'detecting':
-      root.appendChild(paragraph('Checking for installed model…'))
+      append(paragraph('Checking for installed model…'))
       return
     case 'empty':
-      root.appendChild(buildEmpty(handlers))
+      append(buildEmpty(activeHandlers))
       return
     case 'installing':
       if (state.phase === 'downloading') {
-        root.appendChild(buildDownloadingCard(state.downloadedBytes, state.totalBytes))
+        append(buildDownloadingCard(state.downloadedBytes, state.totalBytes))
       } else {
-        root.appendChild(buildUnpackingCard(state.progress, state.currentFile, state.completed, state.total))
+        append(buildUnpackingCard(state.progress, state.currentFile, state.completed, state.total))
       }
       return
     case 'installed':
-      root.appendChild(buildInstalledCard(state, handlers))
+      append(buildInstalledCard(state, activeHandlers))
       return
     case 'error':
-      root.appendChild(buildErrorCard(state.message, handlers))
+      append(buildErrorCard(state.message, activeHandlers))
       return
   }
 }
@@ -94,8 +121,8 @@ function buildEmpty(handlers: InstallHandlers): HTMLElement {
   wrap.className = 'drop-zone'
   wrap.dataset.testid = 'drop-zone'
   wrap.innerHTML = `
-    <div class="dz-title">Install the Slop Hammer model</div>
-    <div class="dz-sub">Download the official model (~400 MB) from Hugging Face, or drop your own <code>.zip</code> bundle.</div>
+    <div class="dz-title">Install the SlopHammer model</div>
+    <div class="dz-sub">Download the verified 350M model (~206 MB) from Hugging Face, or install the exact supported <code>.zip</code> bundle.</div>
     <div class="dz-actions">
       <button class="btn primary" type="button" data-testid="install-hosted">Install from Hugging Face</button>
       <button class="btn subtle" type="button" data-testid="install-file">Install from .zip file…</button>
@@ -228,7 +255,7 @@ function buildInstalledCard(
 
   const reinstall = wrap.querySelector<HTMLButtonElement>('[data-testid="reinstall"]')!
   reinstall.addEventListener('click', () => {
-    if (confirm('Delete the current model and re-install? This frees ~3 GB.')) {
+    if (confirm('Delete the current model and re-install? This frees about 230 MB.')) {
       handlers.onWipe()
     }
   })

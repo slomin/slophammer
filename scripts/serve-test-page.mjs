@@ -25,7 +25,7 @@ i have one question nobody in that meeting could answer. how does it actually wo
     text: `I moved to Lisbon last summer and I still haven't figured out how to buy bread. Not metaphorically. Like, the actual act of buying bread. The bakery near my apartment has one of those numbered ticket dispensers but it only turns on sometimes. When it's off you're supposed to just know the order. I asked the woman behind the counter once if there was a system and she laughed and said yes, but refused to explain. Six months in and I still walk in, panic, and leave with whatever the person in front of me bought.`,
   },
   {
-    label: 'Short — under the 75-char minimum (should toast)',
+    label: 'Short — under the 40-word minimum (should show too-short state)',
     text: `This is too short.`,
   },
 ]
@@ -36,7 +36,7 @@ function escapeHtml(text) {
 
 function renderPage({ hostile = false } = {}) {
   const where = hostile ? 'hostile fixtures' : 'test fixtures'
-  const title = `Slop Hammer — ${where}`
+  const title = `SlopHammer — ${where}`
   const intro = hostile
     ? 'This route simulates site CSS that hides undefined custom elements.'
     : 'Select a paragraph below.'
@@ -91,7 +91,7 @@ function renderPage({ hostile = false } = {}) {
     }
     .brand {
       display: inline-flex; align-items: center; gap: 10px;
-      font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+      font-size: 12px; letter-spacing: 0.12em;
       color: var(--accent); font-weight: 600;
     }
     .brand .mark {
@@ -170,14 +170,14 @@ ${hostile ? HOSTILE_CSS : ''}
   <div class="page-head">
     <div class="brand">
       <span class="mark"></span>
-      slop<span class="sep">/</span>hammer
+      SlopHammer
       <span class="sep">—</span>
       <span class="where">${where}</span>
     </div>
     <button class="theme-toggle" type="button" data-testid="theme-toggle">toggle theme</button>
   </div>
   <p class="intro">
-    ${intro} Right-click a 75+ character selection and pick <b>Check with Slop Hammer</b>.
+    ${intro} Right-click a 40+ word selection and pick <b>Check with SlopHammer</b>.
   </p>
   ${SAMPLES.map(
     (s, i) => `

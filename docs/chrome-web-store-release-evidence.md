@@ -64,7 +64,7 @@ Visual inspection:
 
 - Options screenshot uses light theme and shows install/settings surfaces.
 - Basic result screenshot uses light theme and shows the result card fully.
-- Advanced result screenshot uses light theme and shows the expanded distribution.
+- Advanced result screenshot uses light theme and shows the expanded distribution and analysis time.
 - Promo tile uses the Basic result screenshot composition.
 
 ## Remaining pre-submit checks
