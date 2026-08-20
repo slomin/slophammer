@@ -1,3 +1,4 @@
+import { ModelIntegrityError } from '@/llm/execution-provider'
 import { describe, expect, it, vi } from 'vitest'
 import {
   RuntimeInitializationError,
@@ -217,5 +218,47 @@ describe('RuntimeInitializationError — choosing the actionable cause', () => {
 
     if (!(error instanceof RuntimeInitializationError)) throw new Error('expected a runtime error')
     expect(error.code).toBe('provider-initialization')
+  })
+})
+
+
+// A model that cannot be read, parsed or reconciled with the session is not a
+// provider problem. Retrying it on the fallback burns a second full session
+// build and then reports "restart Chrome" for something only a reinstall fixes.
+describe('provider-independent failures', () => {
+  it('does not try the fallback when the model itself is the problem', async () => {
+    const createWasm = vi.fn()
+    const error = await selectExecutionProvider({
+      probeWebGpu: async () => ({ available: true, adapter: {} }),
+      createWebGpu: async () => {
+        throw new ModelIntegrityError('contract does not match the session outputs')
+      },
+      createWasm,
+    }).then(
+      () => null,
+      (e: unknown) => e as ModelIntegrityError,
+    )
+
+    expect(createWasm).not.toHaveBeenCalled()
+    expect(error).toBeInstanceOf(ModelIntegrityError)
+    if (!(error instanceof ModelIntegrityError)) throw new Error('expected a model error')
+    expect(error.message).toMatch(/reinstall/i)
+    expect(error.cause).toMatch(/contract does not match/)
+  })
+
+  it('still reports a genuine provider failure through the dual-failure path', async () => {
+    const createWasm = vi.fn(async () => {
+      throw new Error('wasm backend failed')
+    })
+    await expect(
+      selectExecutionProvider({
+        probeWebGpu: async () => ({ available: true, adapter: {} }),
+        createWebGpu: async () => {
+          throw new Error('device lost')
+        },
+        createWasm,
+      }),
+    ).rejects.toBeInstanceOf(RuntimeInitializationError)
+    expect(createWasm).toHaveBeenCalled()
   })
 })

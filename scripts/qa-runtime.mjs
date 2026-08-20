@@ -76,6 +76,8 @@ const COMPARE = flag('--compare', null)
 // document's `<p>` order, and the fixtures deliberately include short
 // paragraphs that cannot be classified at all.
 const EQUIVALENCE_MIN_WORDS = 40
+// Verdicts must match exactly; the rounded distribution may drift by this much.
+const EQUIVALENCE_TOLERANCE_PP = 1
 const FIXTURES = process.env.SLOPHAMMER_TEST_PAGE ?? 'http://localhost:8765/'
 const HOSTILE = new URL('/hostile', FIXTURES).href
 
@@ -139,8 +141,11 @@ async function classifyOn(page, sw, tabId, text, requestId, budgetMs = WARM_MS) 
   }
   let card = await waitForCard(page, budgetMs)
   if (card.crashed) {
-    const href = await page.eval('location.href', 5000).catch(() => FIXTURES)
-    if (await ensureHealthy(page, href === undefined ? FIXTURES : href, requestId)) {
+    // A crashed renderer reports chrome-error://chromewebdata/ as its own href,
+    // which `pageIsHealthy` treats as dead — recovering "to its own URL" would
+    // navigate straight back to the error page. Use the URL it was opened on.
+    const target = page.requestedUrl ?? FIXTURES
+    if (await ensureHealthy(page, target, requestId)) {
       // The content script is freshly injected after the reload, so the request
       // has to be re-sent — the old one died with the renderer.
       const retryId = await tabIdForHref(sw, await page.eval('location.href'))
@@ -300,7 +305,9 @@ try {
       )
     : null
   probe?.close()
-  browserWebGpu = adapter?.adapter === true && !report.disabled
+  // null means "could not tell" — distinct from "WebGPU is unavailable", which
+  // would make the cross-check assert the wrong provider on a healthy machine.
+  browserWebGpu = adapter === null ? null : adapter.adapter === true && !report.disabled
   // Assert the two independent sources agree. Passing on "chrome://gpu mentions
   // WebGPU" was unfalsifiable — every Chrome mentions it either way.
   const agree = report.disabled === !(adapter?.adapter === true)
@@ -546,6 +553,7 @@ if (RECORD || COMPARE) {
     if (COMPARE) {
       const baseline = JSON.parse(readFileSync(COMPARE, 'utf8'))
       const mismatches = []
+      let maxDrift = 0
       const baselineSections = Object.keys(baseline.observed ?? {})
       if (baselineSections.length !== classifiable.length) {
         mismatches.push(
@@ -559,20 +567,28 @@ if (RECORD || COMPARE) {
           mismatches.push(`section ${section} missing from the baseline`)
           continue
         }
-        if (a.verdict !== b.verdict || a.percent !== b.percent ||
-            JSON.stringify(a.buckets) !== JSON.stringify(b.buckets)) {
+        // Displayed values are rounded percentages, and the two providers are
+        // not required to agree bit-for-bit — a 49.4 vs 49.6 split renders as
+        // 49 vs 50 on a numerically identical model. The verdict must match
+        // exactly; the distribution is allowed one point of rounding drift.
+        const drift = (x, y) => Math.abs(Number(x) - Number(y))
+        const bucketDrift = (a.buckets ?? []).map((v, i) => drift(v, (b.buckets ?? [])[i]))
+        const worst = Math.max(drift(a.percent, b.percent), ...bucketDrift, 0)
+        if (a.verdict !== b.verdict || worst > EQUIVALENCE_TOLERANCE_PP) {
           mismatches.push(
             `section ${section}: ${baseline.provider} ${a.verdict}/${a.percent}/${JSON.stringify(a.buckets)}` +
-              ` vs ${diag?.executionProvider} ${b.verdict}/${b.percent}/${JSON.stringify(b.buckets)}`,
+              ` vs ${diag?.executionProvider} ${b.verdict}/${b.percent}/${JSON.stringify(b.buckets)}` +
+              ` (worst drift ${worst}pp)`,
           )
         }
+        maxDrift = Math.max(maxDrift, worst)
       }
       record(
         'equivalence',
         mismatches.length === 0,
         mismatches.length
           ? mismatches.join('; ')
-          : `${classifiable.length}/${classifiable.length} fixtures identical to the ${baseline.provider} run`,
+          : `${classifiable.length}/${classifiable.length} fixtures match the ${baseline.provider} run (max drift ${maxDrift}pp, tolerance ${EQUIVALENCE_TOLERANCE_PP}pp)`,
       )
     }
   } catch (error) {
@@ -615,7 +631,10 @@ try {
   // Contexts that appeared mid-run (a rebuilt classifier, a fresh offscreen
   // document) have no baseline, so everything they report belongs to this run.
   await attachConsole()
-  await new Promise((r) => setTimeout(r, 300))
+  // Same window as the initial snapshot: a context created mid-run (a rebuilt
+  // classifier) replays its buffer asynchronously, and a shorter wait can miss
+  // exactly the errors this check exists to catch.
+  await new Promise((r) => setTimeout(r, 800))
   const errors = []
   const warnings = []
   for (const c of consoleContexts) {

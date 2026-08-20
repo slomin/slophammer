@@ -3,6 +3,7 @@ import * as ort from 'onnxruntime-web/webgpu'
 import type { ClassifierRepository } from './classifier-repository'
 import { validateSupportedContract, type SlopHammerContract } from './contract'
 import {
+  ModelIntegrityError,
   selectExecutionProvider,
   type ProviderAttempt,
   type RuntimeDiagnostics,
@@ -55,6 +56,35 @@ export async function setupOnnxClassifier(
   const { runtimeBaseUrl, onProgress, onAttempt } = options
   const isolated = globalThis.crossOriginIsolated === true
 
+  // Start reading the model now. It is independent of the WebGPU probe, and
+  // awaiting the probe first added adapter-creation latency (which can be
+  // seconds on a cold GPU stack) to every cold start.
+  const preparing = loadAllModelFiles(onProgress).then((files): PreparedModel => {
+    const contract: unknown = JSON.parse(files.contractJson)
+    validateSupportedContract(contract)
+
+    const tokenizerConfig = JSON.parse(files.tokenizerConfigJson)
+    const tokenizerData = JSON.parse(files.tokenizerJson)
+    const tokenizer = new PreTrainedTokenizer(tokenizerData, tokenizerConfig)
+
+    return {
+      contract,
+      tokenizer: tokenizer as unknown as TokenizerLike,
+      tokenizerPadding: (tokenizerData as {
+        padding?: { direction?: unknown; pad_id?: unknown }
+      }).padding,
+      model: new Uint8Array(files.modelOnnx),
+      externalData: files.modelDataShards.map((shard) => ({
+        data: new Uint8Array(shard.data),
+        path: shard.path,
+      })),
+    }
+  })
+  // Attach a handler immediately: if this rejects while the probe is still
+  // pending, an unattached rejection surfaces as an unhandled error in the
+  // worker and trips the QA suite's console check.
+  preparing.catch(() => {})
+
   // Probe before touching the ORT environment: its flags are global and are
   // read when the first session is created, so the thread count has to be
   // decided up front.
@@ -91,32 +121,17 @@ export async function setupOnnxClassifier(
   ort.env.wasm.proxy = false
   ort.env.logLevel = 'error'
 
-  // Read and validate the model *before* provider selection. Raising these
-  // inside a provider attempt made a corrupt or retired install look like a
-  // dual-provider failure — the user was told to restart Chrome instead of to
-  // reinstall the model, and the second attempt wasted a full session build on
-  // a failure that has nothing to do with the provider.
-  const model = await loadAllModelFiles(onProgress).then((files): PreparedModel => {
-    const contract: unknown = JSON.parse(files.contractJson)
-    validateSupportedContract(contract)
-
-    const tokenizerConfig = JSON.parse(files.tokenizerConfigJson)
-    const tokenizerData = JSON.parse(files.tokenizerJson)
-    const tokenizer = new PreTrainedTokenizer(tokenizerData, tokenizerConfig)
-
-    return {
-      contract,
-      tokenizer: tokenizer as unknown as TokenizerLike,
-      tokenizerPadding: (tokenizerData as {
-        padding?: { direction?: unknown; pad_id?: unknown }
-      }).padding,
-      model: new Uint8Array(files.modelOnnx),
-      externalData: files.modelDataShards.map((shard) => ({
-        data: new Uint8Array(shard.data),
-        path: shard.path,
-      })),
-    }
-  })
+  // Resolve the model before provider selection, and label its failures as what
+  // they are. Raising them inside a provider attempt made a corrupt or retired
+  // install look like a dual-provider failure — the user was told to restart
+  // Chrome instead of to reinstall the model, and the second attempt wasted a
+  // full session build on a failure that has nothing to do with the provider.
+  let model: PreparedModel
+  try {
+    model = await preparing
+  } catch (error) {
+    throw new ModelIntegrityError(error instanceof Error ? error.message : String(error))
+  }
 
   const createRepository = async (
     provider: RuntimeExecutionProvider,
@@ -129,14 +144,24 @@ export async function setupOnnxClassifier(
         : wasmSessionOptions(model.externalData),
     )
 
+    let runtime
     try {
-      const runtime = resolveRuntimeContract({
+      runtime = resolveRuntimeContract({
         contract: model.contract,
         tokenizerPadId:
           (model.tokenizer as unknown as { pad_token_id?: number }).pad_token_id ?? null,
         tokenizerPadding: model.tokenizerPadding,
         sessionOutputNames: session.outputNames,
       })
+    } catch (error) {
+      await session.release()
+      // Reconciling the contract with the session's outputs is about the model,
+      // not the provider: retrying on the fallback rebuilds a full session only
+      // to fail identically.
+      throw new ModelIntegrityError(error instanceof Error ? error.message : String(error))
+    }
+
+    try {
       const runtimeDiagnostics: RuntimeDiagnostics = {
         executionProvider: provider,
         wasmThreads,

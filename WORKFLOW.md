@@ -53,14 +53,6 @@ session, 4-tab concurrency, a burst backlog, the hostile-CSS page, the live
 dispose/rebuild path, and console hygiene — then prints PASS/FAIL per check and
 exits non-zero if any failed.
 
-**Provider equivalence** is a two-step gate: record every fixture's verdict on
-one provider, then assert the other reproduces it exactly.
-
-```
-pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
-pnpm qa --no-webgpu  && pnpm qa:runtime --expect wasm   --compare /tmp/webgpu.json
-```
-
 ```
 pnpm qa                            # WebGPU available
 pnpm qa:runtime --expect webgpu
@@ -69,8 +61,10 @@ pnpm qa --no-webgpu                # WebGPU genuinely unavailable
 pnpm qa:runtime --expect wasm
 ```
 
-**Provider equivalence** is checked by recording every fixture's verdict on one
-provider and asserting the other reproduces it exactly:
+**Provider equivalence** is a two-step gate: record every fixture's verdict on
+one provider, then assert the other reproduces it. Verdicts must match exactly;
+the rounded distribution is allowed 1pp of drift, because the card rounds and
+the two providers are not required to agree bit-for-bit.
 
 ```
 pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
@@ -100,8 +94,11 @@ hard-coded 30s per call and a high failure threshold, a crash could never be
 detected inside a card budget and simply looked like a classification that never
 settled (measured: 60s of polling a dead tab). `waitForCard` now polls with a
 short per-call timeout, confirms with a health probe, and returns `crashed`
-within ~9s; the suite reloads the tab and retries the request once. `eval`/`send`
-accept a per-call timeout — rule 3 applies to every call, not once globally.
+within ~9s; the suite reloads the tab and retries the request once. Recovery
+navigates to the URL the tab was *opened* on: a crashed renderer reports
+`chrome-error://chromewebdata/` as its own `location.href`, so reloading "its own
+URL" lands straight back on the error page. `eval`/`send` accept a per-call
+timeout — rule 3 applies to every call, not once globally.
 
 **Keep it fast and deterministic.** Budgets are proportionate to measured times
 (1.2–1.8s warm on WebGPU, 2.4–3.0s on CPU/WASM), so a regression fails in
@@ -110,12 +107,6 @@ matched on an empty query string — matching on pathname alone silently selecte
 a probe tab and classified into it (rule 4, the hard way). Console hygiene
 counts only what the current run produced: each context replays its buffer on
 attach (rule 8), so the suite snapshots that first and diffs against it.
-
-**A crashed renderer is recovered, not misreported.** Chrome's "Aw, Snap!"
-leaves the CDP target alive, so a dead tab used to look exactly like a
-classification that never settled and burned the whole budget before failing for
-the wrong reason. `waitForCard` now returns `{crashed: true}` within ~9s, and the
-suite reloads the tab and retries the request once.
 
 **Do not trust a launch flag to disable WebGPU.** `--disable-features=WebGPU`
 does *not* work — `requestAdapter()` still resolves under it. `--disable-gpu`
@@ -135,7 +126,7 @@ document, options page and content scripts — which is the whole point.
 | `pnpm debug classify "<text>"` | Classify text on the fixtures page and print the card. |
 | `pnpm debug classify --section 1` | Same, using fixture section 1. |
 | `pnpm debug logs [seconds]` | Stream console from every extension context, with an error/warning tally. |
-| `pnpm debug throttle <rate>` | Throttle the offscreen **main thread**. Does not slow inference — see rule 10. |
+| `pnpm debug throttle <rate>` | Throttle the offscreen **main thread**. Does not slow inference — see rule 9. |
 | `pnpm debug backlog [n]` | Queue n classifications so a card sits in `loading` past the 45s watchdog. |
 | `pnpm debug reach` | Which open tabs have a live content script. |
 

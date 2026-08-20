@@ -36,6 +36,9 @@ const CHROME_PROFILE = resolve(
     resolve(process.env.HOME ?? '', '.slophammer-chrome-profile'),
 )
 const BUILD_OUT = resolve(repoRoot, '.output/chrome-mv3')
+// `public` is deliberately absent: wxt.config.ts deletes and re-copies
+// public/ort at module load without preserving timestamps, so every `wxt
+// prepare` restamps it and the staleness check would rebuild on every run.
 const BUILD_INPUTS = [
   'background',
   'content',
@@ -44,7 +47,6 @@ const BUILD_INPUTS = [
   'llm',
   'messaging',
   'migration',
-  'public',
   'settings',
   'shared',
   'package.json',

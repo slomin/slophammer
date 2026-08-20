@@ -74,7 +74,15 @@ function classify(requestId: string, text: string): void {
 function dispose(requestId: string): void {
   const operation = tail.then(async () => {
     const repository = await repositoryPromise?.catch(() => null)
-    await repository?.dispose?.()
+    try {
+      await repository?.dispose?.()
+    } catch (error) {
+      // A release can throw on a lost GPU device or an already-torn-down
+      // session. Swallowing it used to skip both statements below, so the
+      // client blocked its full dispose timeout on every model:load and every
+      // wedge recovery, and the dead repository stayed installed.
+      console.warn('[SlopHammer:classifier-worker] releasing the session failed', message(error))
+    }
     repositoryPromise = null
     post({ type: 'dispose:done', requestId })
   })

@@ -30,7 +30,6 @@
 //   5. /json/new returns before the navigation commits, so wait for the real
 //      document, not just readyState.
 import fs from 'node:fs'
-import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -202,6 +201,7 @@ export async function openTab(url, { bringToFront = true } = {}) {
     if (ok) break
     await new Promise((r) => setTimeout(r, 250))
   }
+  page.requestedUrl = url
   if (bringToFront) await page.send('Page.bringToFront').catch(() => {})
   if (!(await pageIsHealthy(page))) {
     // One retry: a renderer that died on first paint usually comes back.
@@ -232,7 +232,7 @@ export async function selectLongParagraph(page, minWords = 45) {
 // The card's deadline lives in content/state.ts. Read it rather than repeating
 // it, so changing the constant cannot leave this harness asserting a stale one.
 export function readCardWatchdogMs() {
-  const src = readFileSync(
+  const src = fs.readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '..', 'content/state.ts'),
     'utf8',
   )
@@ -246,7 +246,15 @@ export function readCardWatchdogMs() {
  * card stayed in 'loading' past its deadline. Shared by `pnpm debug watchdog`
  * and the QA suite so both assert the same thing against the same constant.
  */
-export async function driveWatchdog({ sw, page, tabId, observeMs, requestId, heartbeatMs = 10_000 }) {
+export async function driveWatchdog({
+  sw,
+  page,
+  tabId,
+  observeMs,
+  requestId,
+  heartbeatMs = 10_000,
+  onProgress,
+}) {
   await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'classify:started',
     requestId:${JSON.stringify(requestId)},preview:'watchdog probe',wordCount:60,charCount:400}).catch(()=>{})`)
   const started = Date.now()
@@ -262,8 +270,10 @@ export async function driveWatchdog({ sw, page, tabId, observeMs, requestId, hea
     }
     const card = await page.eval(CARD_SNAPSHOT).catch(() => null)
     if (card?.state && card.state !== 'loading' && !left) {
-      left = { at: Math.round(elapsed / 1000), state: card.state }
+      // The card's error text is the whole diagnostic value when this fails.
+      left = { at: Math.round(elapsed / 1000), state: card.state, error: card.error ?? null }
     }
+    onProgress?.({ elapsedMs: elapsed, state: card?.state ?? null, error: card?.error ?? null })
     await new Promise((r) => setTimeout(r, 1000))
   }
   // Leave the card settled rather than spinning forever.
@@ -402,19 +412,18 @@ async function cmdStatus() {
 
   const off = await attach((x) => x.url.includes('offscreen.html'), 'offscreen')
   if (off) {
-    const offscreenDiagnostics = await off.eval(`(()=>{
-      let runtime=null
-      const encoded=document.documentElement.dataset.runtimeDiagnostics
-      if(encoded){ try{ runtime=JSON.parse(encoded) }catch(e){ runtime={parseError:String(e)} } }
-      return {
-        crossOriginIsolated:self.crossOriginIsolated,
-        secureContext:self.isSecureContext,
-        sharedArrayBuffer:typeof SharedArrayBuffer!=='undefined',
-        hardwareConcurrency:navigator.hardwareConcurrency,
-        runtime
-      }
-    })()`)
-    say('\noffscreen: ' + JSON.stringify(offscreenDiagnostics, null, 2))
+    // Reuse the exported reader rather than a second inline copy: two reads of
+    // the same state drift, and `pnpm qa:runtime` imports the helper.
+    const environment = await off.eval(`({
+      crossOriginIsolated:self.crossOriginIsolated,
+      secureContext:self.isSecureContext,
+      sharedArrayBuffer:typeof SharedArrayBuffer!=='undefined',
+      hardwareConcurrency:navigator.hardwareConcurrency
+    })`)
+    say(
+      '\noffscreen: ' +
+        JSON.stringify({ ...environment, runtime: await offscreenDiagnostics() }, null, 2),
+    )
     say(
       'model: ' +
         JSON.stringify(
@@ -730,6 +739,10 @@ async function cmdWatchdog(args) {
     tabId,
     observeMs: seconds * 1000,
     requestId: `watchdog-${process.pid}`,
+    onProgress: ({ elapsedMs, state, error }) => {
+      const secs = Math.round(elapsedMs / 1000)
+      if (secs > 0 && secs % 15 === 0) say(`  t=${secs}s card=${state} err=${error ?? 'none'}`)
+    },
   })
 
   if (left) {

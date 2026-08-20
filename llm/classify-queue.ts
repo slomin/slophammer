@@ -30,6 +30,8 @@ export interface ClassifyQueue<T, R> {
   drain(): Promise<void>
   /** Return to service after the owner has rebuilt the classifier. */
   reset(): void
+  /** True once a task timed out and the queue stopped accepting work. */
+  isPoisoned(): boolean
 }
 
 export const DEFAULT_MAX_PENDING = 8
@@ -37,6 +39,8 @@ export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 
 export const QUEUE_POISONED_MESSAGE =
   'Classifier is no longer accepting work — a previous run timed out and the session is being rebuilt.'
+
+const QUEUE_ABANDONED_MESSAGE = 'Classifier request was abandoned while the session was rebuilt.'
 
 export function createClassifyQueue<T, R>(
   task: (input: T) => Promise<R> | R,
@@ -54,6 +58,13 @@ export function createClassifyQueue<T, R>(
   // until the owner rebuilds. Both wedges are avoided; neither is traded for
   // the other.
   let poisoned = false
+  // Bumped whenever the queue abandons what it was holding. A task remembers the
+  // generation it was enqueued under and refuses to run, or to adjust the
+  // pending count, once that generation is over — otherwise a task queued behind
+  // a wedged run would wake up and execute against the rebuilt session long
+  // after its caller was rejected, and its late `finally` would decrement a
+  // counter that poisoning had already zeroed.
+  let generation = 0
   // Tasks still waiting for their turn. Their `operation` is chained onto the
   // hung tail, so it will never settle on its own — they have to be rejected
   // explicitly or their callers wait forever.
@@ -64,6 +75,7 @@ export function createClassifyQueue<T, R>(
     poisoned = true
     // Nothing queued can ever run now, so free the slots and let `drain()`
     // resolve — otherwise model:load and the pre-v1 migration shutdown hang.
+    generation += 1
     pending = 0
     tail = Promise.resolve()
     for (const abort of waiting) abort(new Error(QUEUE_POISONED_MESSAGE))
@@ -74,10 +86,17 @@ export function createClassifyQueue<T, R>(
   return {
     pending: () => pending,
 
+    isPoisoned: () => poisoned,
+
     drain: () => tail.then(() => undefined, () => undefined),
 
+    // Safe to install a fresh tail even if an abandoned operation is still
+    // running: recovery always rebuilds the session, so the old work and the new
+    // work are on different sessions and the one-at-a-time invariant — which is
+    // per session — still holds.
     reset() {
       poisoned = false
+      generation += 1
       pending = 0
       tail = Promise.resolve()
       waiting.clear()
@@ -99,6 +118,7 @@ export function createClassifyQueue<T, R>(
       const started = new Promise<void>((resolve) => {
         markStarted = resolve
       })
+      const myGeneration = generation
       let abort!: (error: Error) => void
       const aborted = new Promise<never>((_, reject) => {
         abort = reject
@@ -106,8 +126,9 @@ export function createClassifyQueue<T, R>(
       aborted.catch(() => {})
       waiting.add(abort)
       const operation = tail.then(() => {
-        // A queue poisoned while this task waited must not start it.
+        // A queue poisoned or reset while this task waited must not start it.
         if (poisoned) throw new Error(QUEUE_POISONED_MESSAGE)
+        if (myGeneration !== generation) throw new Error(QUEUE_ABANDONED_MESSAGE)
         waiting.delete(abort)
         markStarted()
         return Promise.resolve(task(input))
@@ -118,7 +139,9 @@ export function createClassifyQueue<T, R>(
       )
       void operation
         .finally(() => {
-          if (!poisoned) pending -= 1
+          // Only this task's own generation owns its slot; poisoning already
+          // zeroed the count for everything it abandoned.
+          if (myGeneration === generation) pending -= 1
         })
         .catch(() => {})
 

@@ -30,7 +30,7 @@ export interface ClassifierWorkerClientOptions {
   classifyTimeoutMs?: number
 }
 
-const DEFAULT_INIT_TIMEOUT_MS = 10 * 60_000
+export const DEFAULT_INIT_TIMEOUT_MS = 10 * 60_000
 const DEFAULT_DISPOSE_TIMEOUT_MS = 10_000
 // Bounds the worst-case spinner: the offscreen heartbeat keeps the card's 45s
 // watchdog re-armed for as long as a request is in flight, so this is what
@@ -39,7 +39,7 @@ const DEFAULT_DISPOSE_TIMEOUT_MS = 10_000
 // CPU/WASM) — a false timeout on a slow Chromebook would restart a healthy
 // worker, which is worse than waiting. It fires well before the queue's
 // last-resort poison, so recovery is a clean worker restart.
-const DEFAULT_CLASSIFY_TIMEOUT_MS = 5 * 60_000
+export const DEFAULT_CLASSIFY_TIMEOUT_MS = 5 * 60_000
 
 function nextRequestId(sequence: number): string {
   return `worker-${sequence}`
@@ -141,13 +141,22 @@ export function createClassifierWorkerClient(
       disposed = true
       const requestId = nextRequestId(++sequence)
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, disposeTimeoutMs)
+        const timer = setTimeout(() => {
+          disposePending.delete(requestId)
+          resolve()
+        }, disposeTimeoutMs)
         disposePending.set(requestId, () => {
           clearTimeout(timer)
+          disposePending.delete(requestId)
           resolve()
         })
         worker.postMessage({ type: 'dispose', requestId })
       })
+      // Mirror `fatal`: release every waiter and drop their closures. Leaving
+      // the timed-out dispose entry in the map kept its timer closure alive for
+      // the life of the client, and a second dispose caller hung on its own.
+      for (const resolve of disposePending.values()) resolve()
+      disposePending.clear()
       const error = new Error('Classifier worker was disposed.')
       for (const request of pending.values()) {
         if (request.timer) clearTimeout(request.timer)

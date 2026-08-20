@@ -279,3 +279,81 @@ describe('createClassifyQueue — a task that never settles', () => {
     expect(queue.pending()).toBe(0)
   })
 })
+
+
+// Recovery has to leave the queue in a clean state. A poisoned queue abandons
+// what it was holding; those abandoned tasks must never execute afterwards, and
+// must not keep accounting against the rebuilt queue.
+describe('createClassifyQueue — recovery bookkeeping', () => {
+  it('never runs a task that was abandoned by poisoning', async () => {
+    const gate = deferred<string>()
+    const started: string[] = []
+    const queue = createClassifyQueue(
+      (text: string) => {
+        started.push(text)
+        return text === 'hang' ? gate.promise : Promise.resolve(text)
+      },
+      { taskTimeoutMs: 20 },
+    )
+    const head = queue.run('hang')
+    const abandoned = queue.run('abandoned').then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+    await expect(head).rejects.toThrow(/timed out/i)
+    expect((await abandoned)?.message).toMatch(/no longer accepting/i)
+
+    queue.reset()
+    // The wedged task finally returns; its queued follower must stay abandoned
+    // rather than waking up and running against the rebuilt session.
+    gate.resolve('hang')
+    await new Promise((r) => setTimeout(r, 40))
+    expect(started).toEqual(['hang'])
+  })
+
+  it('keeps pending non-negative across a poison and reset cycle', async () => {
+    const gate = deferred<string>()
+    const queue = createClassifyQueue(
+      (text: string) => (text === 'hang' ? gate.promise : Promise.resolve(text)),
+      { taskTimeoutMs: 20 },
+    )
+    const head = queue.run('hang')
+    const queued = queue.run('queued').then(
+      () => null,
+      () => null,
+    )
+    await expect(head).rejects.toThrow(/timed out/i)
+    await queued
+    queue.reset()
+
+    gate.resolve('late')
+    await new Promise((r) => setTimeout(r, 40))
+    expect(queue.pending()).toBe(0)
+    expect(queue.pending()).toBeGreaterThanOrEqual(0)
+  })
+
+  it('serializes again after a reset', async () => {
+    let hang = true
+    let inFlight = 0
+    let maxInFlight = 0
+    const queue = createClassifyQueue(
+      async (text: string) => {
+        if (hang) return new Promise<string>(() => {})
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((r) => setTimeout(r, 5))
+        inFlight -= 1
+        return text
+      },
+      { taskTimeoutMs: 20 },
+    )
+    await expect(queue.run('hang')).rejects.toThrow(/timed out/i)
+    hang = false
+    queue.reset()
+
+    const results = await Promise.all(['a', 'b', 'c'].map((t) => queue.run(t)))
+    expect(results).toEqual(['a', 'b', 'c'])
+    expect(maxInFlight).toBe(1)
+    expect(queue.pending()).toBe(0)
+  })
+})

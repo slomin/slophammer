@@ -94,6 +94,28 @@ function mostActionable(...messages: string[]): RuntimeInitializationErrorCode {
   return 'provider-initialization'
 }
 
+/**
+ * The installed model cannot be read, parsed, or reconciled with the session.
+ * Provider-independent by definition, so the fallback is not attempted: it would
+ * fail identically after a second full session build, and the dual-provider
+ * message would tell the user to restart Chrome for something only a reinstall
+ * fixes.
+ */
+export class ModelIntegrityError extends Error {
+  readonly code = 'corrupt-model' as const
+  readonly cause: string
+
+  constructor(cause: string) {
+    super(actionableMessage('corrupt-model'))
+    this.name = 'ModelIntegrityError'
+    this.cause = cause
+  }
+
+  diagnosticMessage(): string {
+    return `Model integrity: ${this.cause}`
+  }
+}
+
 export class RuntimeInitializationError extends Error {
   readonly code: RuntimeInitializationErrorCode
   readonly webGpuError: string
@@ -136,6 +158,8 @@ export async function selectExecutionProvider<T, TAdapter = unknown>(
         provider: 'webgpu',
       }
     } catch (error) {
+      // Nothing about a broken model gets better on the other provider.
+      if (error instanceof ModelIntegrityError) throw error
       fallbackReason = errorMessage(error)
     }
   } else {

@@ -2,6 +2,10 @@ import { createClassifierRepository } from '@/llm'
 import type { ClassifierRepository } from '@/llm'
 import { startBrowserClassifierWorker } from '@/llm/classifier-worker-client'
 import { createClassifyQueue, type ClassifyQueue } from '@/llm/classify-queue'
+import {
+  DEFAULT_CLASSIFY_TIMEOUT_MS,
+  DEFAULT_INIT_TIMEOUT_MS,
+} from '@/llm/classifier-worker-client'
 import type { ClassifyResult } from '@/llm/classify-result'
 import type { RuntimeDiagnostics } from '@/llm/execution-provider'
 import { isModelInstalled } from '@/llm/opfs-model-reader'
@@ -89,6 +93,7 @@ function startFactory(): Promise<ClassifierRepository> {
 // neither provider could initialize). Every classify surfaces the reason to
 // the user; this guard only stops an unhandled-rejection report.
 function trackFactory(): Promise<ClassifierRepository> {
+  blockedForUpdate = false
   const p = startFactory().then((repository) => {
     runtimeStats.sessionCreations += 1
     runtimeStats.diagnostics = repository.runtimeDiagnostics
@@ -109,11 +114,39 @@ function classifierPromise(): Promise<ClassifierRepository> {
   return classifier.get()
 }
 
+// Set only by the migration shutdown, which deliberately blocks classification
+// until the update finishes. Every other failure is worth retrying.
+let blockedForUpdate = false
+
+// Lifecycle operations must not interleave: a model:load arriving while a wedge
+// recovery is awaiting dispose used to leave one of the two freshly built
+// classifiers orphaned, never disposed, holding a worker and a full session.
+let lifecycle: Promise<unknown> = Promise.resolve()
+function serialiseLifecycle<T>(work: () => Promise<T>): Promise<T> {
+  const next = lifecycle.then(work, work)
+  lifecycle = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  return next
+}
+
 // A worker that crashed or was terminated after a timeout leaves the shared
-// promise resolved with a dead repository, so every later classify would fail
-// forever. Rebuild instead of handing the corpse out again.
+// promise resolved with a dead repository; a failed rebuild leaves it rejected.
+// Either way, caching it means every later classify fails forever, so rebuild
+// rather than handing the corpse out again.
 async function activeClassifier(): Promise<ClassifierRepository> {
-  const repo = await classifierPromise()
+  if (blockedForUpdate) return classifierPromise()
+  let repo: ClassifierRepository
+  try {
+    repo = await classifierPromise()
+  } catch (err) {
+    log.warn('classifier promise is rejected — rebuilding for this request', String(err))
+    forgetDiagnostics()
+    const rebuilt = trackFactory()
+    classifier.replace(rebuilt)
+    return rebuilt
+  }
   if (!repo.isDisposed?.()) return repo
   log.warn('classifier session is gone — rebuilding before this request')
   forgetDiagnostics()
@@ -127,28 +160,39 @@ async function activeClassifier(): Promise<ClassifierRepository> {
 // for a classifier that is not running.
 function forgetDiagnostics(): void {
   runtimeStats.diagnostics = undefined
+  // A wedged classify never runs its `finally`, so without this the counter
+  // stays above zero for the rest of the session and every later run inflates
+  // maxConcurrentRuns.
+  runtimeStats.inFlight = 0
   publishRuntimeStats()
 }
 
-async function recoverFromWedge(): Promise<void> {
-  const previous = classifier.current()
-  forgetDiagnostics()
-  const blocked = Promise.reject<ClassifierRepository>(
-    new Error('Classifier is restarting after a wedged run.'),
-  )
-  blocked.catch(() => {})
-  classifier.replace(blocked)
-  const old = await previous?.catch(() => null)
-  if (old?.dispose) {
-    try {
-      await old.dispose()
-    } catch (err) {
-      log.warn('failed to release the wedged session', String(err))
+function recoverFromWedge(): Promise<void> {
+  return serialiseLifecycle(async () => {
+    const previous = classifier.current()
+    forgetDiagnostics()
+    const old = await previous?.catch(() => null)
+    if (old?.dispose) {
+      try {
+        // Terminates the worker, which is what actually stops the wedged run.
+        await old.dispose()
+      } catch (err) {
+        log.warn('failed to release the wedged session', String(err))
+      }
     }
-  }
-  classifier.replace(trackFactory())
-  classifyQueue?.reset()
-  log.info('classifier rebuilt after a wedged run')
+    // Deliberately lazy, matching the cold-start design: the likely cause of a
+    // wedge is memory pressure, so rebuilding a full session immediately would
+    // compete with the very condition that caused it. The next request builds
+    // one through `activeClassifier`.
+    const idle = Promise.reject<ClassifierRepository>(
+      new Error('Classifier is restarting after a wedged run.'),
+    )
+    idle.catch(() => {})
+    classifier.replace(idle)
+    // Only now, with the old session gone, is it safe to take work again.
+    classifyQueue?.reset()
+    log.info('classifier released after a wedged run; it will rebuild on the next request')
+  })
 }
 
 // Every classification goes through this queue so overlapping requests can
@@ -173,7 +217,13 @@ classifyQueue = createClassifyQueue(
       }
     }),
   {
-    // A task that outlives this is stuck behind something the worker-level
+    // The queue's timer starts when a task reaches the head, which is *before*
+    // the classifier promise resolves — so on a cold start it covers worker
+    // init as well as the classification. Sized above both, or it would poison
+    // a perfectly healthy worker that was merely still initialising, instead of
+    // letting the worker-level timeout recover cleanly.
+    taskTimeoutMs: DEFAULT_INIT_TIMEOUT_MS + DEFAULT_CLASSIFY_TIMEOUT_MS + 60_000,
+    // A task that outlives that is stuck behind something the worker-level
     // timeout could not recover. The queue stops taking work rather than
     // starting a second run on a session whose first run is still alive, so
     // rebuild the classifier and put it back into service.
@@ -196,24 +246,30 @@ async function reinitialiseClassifier(): Promise<void> {
   log.info('model:load received — re-initialising classifier', {
     queued: classifyQueue?.pending() ?? 0,
   })
+  // Captured before `classifier.replace(next)` below. Reading it inside the
+  // callback deadlocks: the replace runs synchronously, so by the time the
+  // callback executes `classifier.current()` is the very promise it is inside,
+  // and awaiting it waits on itself forever.
   const previous = classifier.current()
-  const next = (classifyQueue?.drain() ?? Promise.resolve())
-    .then(async () => {
-      const old = await previous?.catch(() => null)
-      forgetDiagnostics()
-      if (old?.dispose) {
-        try {
-          await old.dispose()
-          log.debug('released the previous classifier session')
-        } catch (err) {
-          log.warn('failed to release the previous session', String(err))
-        }
+  const next = serialiseLifecycle(async () => {
+    await classifyQueue?.drain()
+    const old = await previous?.catch(() => null)
+    forgetDiagnostics()
+    if (old?.dispose) {
+      try {
+        await old.dispose()
+        log.debug('released the previous classifier session')
+      } catch (err) {
+        log.warn('failed to release the previous session', String(err))
       }
-      return trackFactory()
-    })
-    .then((repo) => repo)
+    }
+    // Resetting before the drain resolved threw away the serialization tail
+    // while a task was still running on the old session, so the next request
+    // chained onto a fresh tail and overlapped it.
+    if (classifyQueue?.isPoisoned()) classifyQueue.reset()
+    return trackFactory()
+  })
   classifier.replace(next)
-  classifyQueue?.reset()
   next.catch((err) => log.warn('classifier unavailable', String(err)))
 }
 
@@ -225,6 +281,7 @@ async function shutdownClassifier(): Promise<void> {
   forgetDiagnostics()
   const blocked = Promise.reject<ClassifierRepository>(new Error('SlopHammer update in progress.'))
   blocked.catch(() => {})
+  blockedForUpdate = true
   classifier.replace(blocked)
 }
 
