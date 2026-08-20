@@ -1,0 +1,86 @@
+name: Feature request
+description: Propose a focused improvement to Slop Hammer
+title: "feat: "
+labels:
+  - "type:feature"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user outcome first. A focused proposal is easier to refine, test, and ship.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should Slop Hammer do?
+      placeholder: Describe the improvement in a few sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why and current behavior
+      description: Who benefits, why does it matter, and what happens today?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Delivery track
+      description: Choose the closest Project track. Maintainers will set the Project field during triage.
+      options:
+        - Runtime
+        - Card UX
+        - Model Install
+        - Inference
+        - Tooling/Release
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the behavior and deliverables included in this issue.
+      placeholder: |
+        - …
+        - …
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Define observable outcomes rather than implementation details.
+      placeholder: |
+        - [ ] …
+        - [ ] …
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_expectations
+    attributes:
+      label: Test expectations
+      description: Note the unit, E2E, and manual evidence this work should need.
+      placeholder: |
+        - Unit: …
+        - E2E: …
+        - Manual: …
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What related work should remain outside this issue?
+
+  - type: markdown
+    attributes:
+      value: |
+        Project Status, Refinement, and Track are maintained separately on the Slop Hammer delivery board. Work moves to Todo only after refinement and passes through QA when extension behavior needs manual validation.

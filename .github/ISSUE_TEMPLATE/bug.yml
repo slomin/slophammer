@@ -1,0 +1,138 @@
+name: Bug report
+description: Report broken or misleading Slop Hammer behavior
+title: "bug: "
+labels:
+  - "type:bug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Slop Hammer. Please avoid including sensitive selected text, page content, or model files.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+      placeholder: Describe the problem in a few sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current and expected behavior
+      description: What happened, and what should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open …
+        2. Select …
+        3. Choose “Check with Slop Hammer” …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Delivery track
+      description: Choose the closest Project track. Maintainers will set the Project field during triage.
+      options:
+        - Runtime
+        - Card UX
+        - Model Install
+        - Inference
+        - Tooling/Release
+    validations:
+      required: true
+
+  - type: input
+    id: chrome_version
+    attributes:
+      label: Chrome version
+      description: Find this at chrome://version. Include the channel if known.
+      placeholder: "For example: 147.0.7727.15 Stable"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: page_type
+    attributes:
+      label: Page type
+      options:
+        - Normal http/https page
+        - Page with an iframe or embedded editor
+        - PDF viewer
+        - Restricted or chrome:// page
+        - Local file:// page
+        - Slop Hammer options or extension page
+        - Other or unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model_state
+    attributes:
+      label: Model state
+      options:
+        - Installed and working on other pages
+        - Installed but failing to load
+        - Installing, updating, or replacing
+        - Not installed
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: visible_errors
+    attributes:
+      label: Visible errors or logs
+      description: Paste only relevant messages and remove sensitive content. Write “None” if no error was visible.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Proposed scope
+      description: Optional—describe the smallest useful fix if you have one in mind.
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: What observable behavior would prove this is fixed?
+      placeholder: |
+        - [ ] …
+        - [ ] …
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_expectations
+    attributes:
+      label: Test expectations
+      description: Note useful unit, E2E, or manual regression coverage.
+      placeholder: |
+        - Unit: …
+        - E2E: …
+        - Manual: …
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What related work should remain outside this issue?
+
+  - type: markdown
+    attributes:
+      value: |
+        Project Status, Refinement, and Track are maintained separately on the Slop Hammer delivery board. Work moves to Todo only after refinement and passes through QA when extension behavior needs manual validation.

@@ -1,0 +1,93 @@
+name: Spike or chore
+description: Plan an investigation, documentation task, or maintenance change
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for bounded research and maintenance work. Spikes should name the decision or evidence they will produce.
+
+  - type: dropdown
+    id: work_type
+    attributes:
+      label: Work type
+      description: GitHub forms cannot apply a different label based on this answer; maintainers will add the matching type label during triage.
+      options:
+        - Spike
+        - Chore
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What investigation or maintenance outcome is needed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why and current state
+      description: Why is this needed now, and what is the current state?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Delivery track
+      description: Choose the closest Project track. Maintainers will set the Project field during triage.
+      options:
+        - Runtime
+        - Card UX
+        - Model Install
+        - Inference
+        - Tooling/Release
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the work included. For a spike, name the questions to answer and evidence to produce.
+      placeholder: |
+        - …
+        - …
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: What output or observable result makes this complete?
+      placeholder: |
+        - [ ] …
+        - [ ] …
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_expectations
+    attributes:
+      label: Verification expectations
+      description: Note required tests, checks, review evidence, or manual validation.
+      placeholder: |
+        - Automated: …
+        - Manual: …
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What related work should remain outside this issue?
+
+  - type: markdown
+    attributes:
+      value: |
+        Project Status, Refinement, and Track are maintained separately on the Slop Hammer delivery board. Work moves to Todo only after refinement and passes through QA when extension behavior needs manual validation.
