@@ -12,6 +12,14 @@
 //   --expect <webgpu|wasm>  fail unless the classifier chose this provider
 //   --watchdog              also wait out the card's real deadline in-browser
 //   --site <url>            also smoke a real site (opt-in; needs the network)
+//   --record <file>         write per-fixture verdicts for a cross-provider diff
+//   --compare <file>        assert this provider matches a recorded run
+//
+// Provider equivalence is checked by recording every fixture's verdict on one
+// provider and asserting the other reproduces it:
+//
+//   pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
+//   pnpm qa --no-webgpu  && pnpm qa:runtime --expect wasm   --compare /tmp/webgpu.json
 //
 // The watchdog's timing rules are covered deterministically by
 // tests/unit/classify-watchdog.test.ts with fake timers, so the in-browser
@@ -20,6 +28,7 @@
 //
 // Every check prints PASS/FAIL with the evidence it used; the process exits
 // non-zero if any check fails, so this is usable from CI or a release gate.
+import { readFileSync, writeFileSync } from 'node:fs'
 import {
   CARD_SNAPSHOT,
   attach,
@@ -35,6 +44,8 @@ import {
   waitForCard,
   readCardWatchdogMs,
   driveWatchdog,
+  pageIsHealthy,
+  recoverPage,
 } from './debug-extension.mjs'
 
 const argv = process.argv.slice(2)
@@ -59,6 +70,12 @@ const WATCHDOG = has('--watchdog')
 // and markup are outside our control. The local hostile-CSS fixture covers the
 // same failure mode deterministically; use --site before a release.
 const SITE = flag('--site', null)
+const RECORD = flag('--record', null)
+const COMPARE = flag('--compare', null)
+// Chosen from the page rather than hardcoded: `section p` indices are not the
+// document's `<p>` order, and the fixtures deliberately include short
+// paragraphs that cannot be classified at all.
+const EQUIVALENCE_MIN_WORDS = 40
 const FIXTURES = process.env.SLOPHAMMER_TEST_PAGE ?? 'http://localhost:8765/'
 const HOSTILE = new URL('/hostile', FIXTURES).href
 
@@ -93,6 +110,18 @@ const record = (name, ok, detail) => {
 }
 const fail = (name, error) => record(name, false, `threw: ${String(error?.message ?? error)}`)
 
+// A crashed renderer must not be reported as a failed classification. Recover
+// the tab and retry once; only a crash that survives recovery is a real failure.
+async function ensureHealthy(page, url, label) {
+  if (await pageIsHealthy(page)) return true
+  say(`  ${label}: renderer is not responding — reloading the tab and retrying`)
+  const recovered = await recoverPage(page, url, { readySelector: 'p' })
+  if (!recovered) return false
+  // The tab id changes with a fresh document only if the tab was replaced; the
+  // caller re-resolves it, so just report that the page is usable again.
+  return true
+}
+
 async function classifyOn(page, sw, tabId, text, requestId, budgetMs = WARM_MS) {
   const started = Date.now()
   await dispatchClassify(sw, tabId, text, requestId)
@@ -108,7 +137,19 @@ async function classifyOn(page, sw, tabId, text, requestId, budgetMs = WARM_MS) 
     if (state === 'loading') break
     await new Promise((r) => setTimeout(r, 50))
   }
-  const card = await waitForCard(page, budgetMs)
+  let card = await waitForCard(page, budgetMs)
+  if (card.crashed) {
+    const href = await page.eval('location.href', 5000).catch(() => FIXTURES)
+    if (await ensureHealthy(page, href === undefined ? FIXTURES : href, requestId)) {
+      // The content script is freshly injected after the reload, so the request
+      // has to be re-sent — the old one died with the renderer.
+      const retryId = await tabIdForHref(sw, await page.eval('location.href'))
+      if (retryId != null) {
+        await dispatchClassify(sw, retryId, text, `${requestId}-retry`)
+        card = await waitForCard(page, budgetMs)
+      }
+    }
+  }
   return { card, ms: Date.now() - started }
 }
 
@@ -211,6 +252,30 @@ const hostilePreload = preload(HOSTILE, (t) =>
 const sitePreload = SITE ? preload(SITE).catch((error) => ({ error })) : null
 
 
+// Attach console listeners before any check runs. Rule 8: each context replays
+// its retained buffer on attach, so anything already there predates this run —
+// snapshot it and count only what arrives afterwards. Counting the whole buffer
+// made the check fail on errors from a previous run of the suite.
+const consoleContexts = []
+const consoleBaseline = new Map()
+async function attachConsole() {
+  for (const t of await targets()) {
+    const relevant =
+      t.type === 'service_worker' ||
+      t.url.includes('offscreen.html') ||
+      t.url.includes('options.html')
+    if (!relevant || consoleBaseline.has(t.id)) continue
+    const c = await attach((x) => x.id === t.id, t.type).catch(() => null)
+    if (!c) continue
+    consoleContexts.push(c)
+    consoleBaseline.set(t.id, 0)
+  }
+}
+await attachConsole()
+// Let the replayed buffers land before deciding what counts as pre-existing.
+await new Promise((r) => setTimeout(r, 800))
+for (const c of consoleContexts) consoleBaseline.set(c.targetId, c.events.length)
+
 // 1. WebGPU evidence, from the browser rather than from the launch flag.
 //    `--disable-features=WebGPU` does NOT disable WebGPU; only `--disable-gpu`
 //    does, so the flag is never trusted on its own.
@@ -255,7 +320,7 @@ try {
   baseline = cold.card
   record(
     'cold-start',
-    cold.card.state === 'ready' && !cold.card.timedOut,
+    cold.card.state === 'ready' && !cold.card.timedOut && !cold.card.crashed,
     `${(cold.ms / 1000).toFixed(1)}s verdict=${cold.card.verdict} ${cold.card.percent}% raw=${JSON.stringify(cold.card.buckets)}`,
   )
 } catch (error) {
@@ -437,21 +502,125 @@ if (!WATCHDOG) {
   }
 }
 
-// 10. Console hygiene across every reachable context.
-try {
-  const contexts = []
-  for (const t of await targets()) {
-    if (t.type === 'service_worker' || t.url.includes('offscreen.html') || t.url.includes('options.html')) {
-      const c = await attach((x) => x.id === t.id, t.type).catch(() => null)
-      if (c) contexts.push(c)
+// 11. Provider equivalence. The pinned model, preprocessing, calibration and
+//     thresholds are provider-independent, so every fixture must produce the
+//     same verdict on WebGPU and on CPU/WASM.
+if (RECORD || COMPARE) {
+  try {
+    const classifiable = await page.eval(`(()=>{
+      const out=[]
+      document.querySelectorAll('section p').forEach((p,i)=>{
+        const words=(p.textContent||'').trim().split(/\\s+/).filter(Boolean).length
+        if(words>=${EQUIVALENCE_MIN_WORDS}) out.push(i)
+      })
+      return out})()`)
+    if (!classifiable?.length) throw new Error('no classifiable fixture paragraphs on the test page')
+
+    const observed = {}
+    for (const section of classifiable) {
+      const body = await page.eval(`(()=>{const p=document.querySelectorAll('section p')[${section}]
+        if(!p) return null
+        const r=document.createRange();r.selectNodeContents(p)
+        const s=getSelection();s.removeAllRanges();s.addRange(r);return s.toString()})()`)
+      if (!body) throw new Error(`no fixture section ${section}`)
+      const { card } = await classifyOn(page, sw, tabId, body, `qa-eq-${process.pid}-${section}`)
+      if (card.state !== 'ready') {
+        throw new Error(`section ${section} did not settle: ${card.state} (${card.error ?? ''})`)
+      }
+      observed[section] = {
+        verdict: card.verdict,
+        percent: card.percent,
+        buckets: card.buckets,
+      }
     }
+
+    if (RECORD) {
+      writeFileSync(RECORD, JSON.stringify({ provider: diag?.executionProvider, observed }, null, 2))
+      record(
+        'equivalence-record',
+        true,
+        `recorded ${classifiable.length} fixtures from ${diag?.executionProvider} to ${RECORD}`,
+      )
+    }
+
+    if (COMPARE) {
+      const baseline = JSON.parse(readFileSync(COMPARE, 'utf8'))
+      const mismatches = []
+      const baselineSections = Object.keys(baseline.observed ?? {})
+      if (baselineSections.length !== classifiable.length) {
+        mismatches.push(
+          `baseline covers ${baselineSections.length} fixtures, this run covers ${classifiable.length}`,
+        )
+      }
+      for (const section of classifiable) {
+        const a = baseline.observed?.[section]
+        const b = observed[section]
+        if (!a) {
+          mismatches.push(`section ${section} missing from the baseline`)
+          continue
+        }
+        if (a.verdict !== b.verdict || a.percent !== b.percent ||
+            JSON.stringify(a.buckets) !== JSON.stringify(b.buckets)) {
+          mismatches.push(
+            `section ${section}: ${baseline.provider} ${a.verdict}/${a.percent}/${JSON.stringify(a.buckets)}` +
+              ` vs ${diag?.executionProvider} ${b.verdict}/${b.percent}/${JSON.stringify(b.buckets)}`,
+          )
+        }
+      }
+      record(
+        'equivalence',
+        mismatches.length === 0,
+        mismatches.length
+          ? mismatches.join('; ')
+          : `${classifiable.length}/${classifiable.length} fixtures identical to the ${baseline.provider} run`,
+      )
+    }
+  } catch (error) {
+    fail(RECORD ? 'equivalence-record' : 'equivalence', error)
   }
-  // Rule 8: each context replays its retained console buffer on attach, so
-  // there is nothing to wait for here.
+} else {
+  say('SKIP  equivalence            --record <file> then --compare <file> across providers')
+}
+
+// 12. The live rebuild path: model:load disposes the session and builds a new
+//     one. Exercising it here means the dispose/replace/queue-reset machinery
+//     the recovery paths rely on is proven in a real browser, not only against
+//     fakes in unit tests.
+try {
+  const before = await offscreenDiagnostics()
+  await sw.eval(`chrome.runtime.sendMessage({type:'model:load'}).catch(()=>{})`)
+  let after = null
+  const deadline = Date.now() + COLD_MS
+  while (Date.now() < deadline) {
+    after = await offscreenDiagnostics()
+    if ((after?.sessionCreations ?? 0) > (before?.sessionCreations ?? 0)) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  const post = await classifyOn(page, sw, tabId, text, `qa-rebuilt-${process.pid}`, COLD_MS)
+  const diagAfter = await offscreenDiagnostics()
+  record(
+    'rebuild',
+    post.card.state === 'ready' &&
+      (diagAfter?.sessionCreations ?? 0) > (before?.sessionCreations ?? 0) &&
+      diagAfter?.executionProvider === before?.executionProvider,
+    `sessionCreations ${before?.sessionCreations} → ${diagAfter?.sessionCreations}, ` +
+      `provider ${diagAfter?.executionProvider}, next run ${(post.ms / 1000).toFixed(1)}s ${post.card.verdict}`,
+  )
+} catch (error) {
+  fail('rebuild', error)
+}
+
+// 10. Console hygiene — only what this run produced.
+try {
+  // Contexts that appeared mid-run (a rebuilt classifier, a fresh offscreen
+  // document) have no baseline, so everything they report belongs to this run.
+  await attachConsole()
+  await new Promise((r) => setTimeout(r, 300))
   const errors = []
   const warnings = []
-  for (const c of contexts) {
-    for (const e of c.events) {
+  for (const c of consoleContexts) {
+    const from = consoleBaseline.get(c.targetId) ?? 0
+    for (const e of c.events.slice(from)) {
       if (e.kind === 'error' || e.kind === 'exception') errors.push(e.text)
       if (e.kind === 'warning') warnings.push(e.text)
     }
@@ -461,7 +630,7 @@ try {
   record(
     'console',
     errors.length === 0 && unexpected.length === 0,
-    `${errors.length} errors, ${warnings.length} warnings (${unexpected.length} unexpected)` +
+    `${errors.length} errors, ${warnings.length} warnings (${unexpected.length} unexpected) since this run started` +
       (errors.length ? ` :: ${errors[0].slice(0, 120)}` : '') +
       (unexpected.length ? ` :: ${unexpected[0].slice(0, 120)}` : ''),
   )

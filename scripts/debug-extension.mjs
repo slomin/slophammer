@@ -101,10 +101,10 @@ export function open(target) {
       m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result)
     }
   })
-  const send = (method, params = {}) => {
+  const send = (method, params = {}, ms = 30000) => {
     const i = ++id
     ws.send(JSON.stringify({ id: i, method, params }))
-    return withTimeout(new Promise((res, rej) => pend.set(i, { res, rej })), 30000, method)
+    return withTimeout(new Promise((res, rej) => pend.set(i, { res, rej })), ms, method)
   }
   return {
     targetId: target.id,
@@ -124,13 +124,17 @@ export function open(target) {
       10000,
       'ws open ' + target.__tag,
     ),
-    async eval(expression) {
-      const r = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-        allowUnsafeEvalBlockedByCSP: true,
-      })
+    async eval(expression, ms = 30000) {
+      const r = await send(
+        'Runtime.evaluate',
+        {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+          allowUnsafeEvalBlockedByCSP: true,
+        },
+        ms,
+      )
       if (r.exceptionDetails) {
         return { __error: String(r.exceptionDetails.exception?.description ?? '').slice(0, 300) }
       }
@@ -199,6 +203,13 @@ export async function openTab(url, { bringToFront = true } = {}) {
     await new Promise((r) => setTimeout(r, 250))
   }
   if (bringToFront) await page.send('Page.bringToFront').catch(() => {})
+  if (!(await pageIsHealthy(page))) {
+    // One retry: a renderer that died on first paint usually comes back.
+    await recoverPage(page, url)
+    if (!(await pageIsHealthy(page))) {
+      throw new Error(`tab for ${url} did not come up (crashed renderer?)`)
+    }
+  }
   return page
 }
 
@@ -261,6 +272,39 @@ export async function driveWatchdog({ sw, page, tabId, observeMs, requestId, hea
   return { left }
 }
 
+// A crashed renderer ("Aw, Snap!") keeps its CDP target, so evaluating in it
+// fails or the document becomes a chrome-error:// page. Without this check a
+// crash looks exactly like a classification that never settles, and the harness
+// polls a dead tab for its whole budget before reporting the wrong cause.
+export async function pageIsHealthy(page) {
+  try {
+    const href = await page.eval('location.href', 3000)
+    // `eval` surfaces page exceptions as { __error }, not a rejection.
+    if (!href || typeof href !== 'string') return false
+    return !href.startsWith('chrome-error://')
+  } catch {
+    return false
+  }
+}
+
+/** Re-navigate a crashed tab and wait for a live document. */
+export async function recoverPage(page, url, { readySelector } = {}) {
+  await page.send('Page.enable', {}, 5000).catch(() => {})
+  await page.send('Page.navigate', { url }, 15000).catch(() => {})
+  for (let i = 0; i < 80; i++) {
+    const ok = await page
+      .eval(
+        `document.readyState==='complete' && !location.href.startsWith('chrome-error://')` +
+          (readySelector ? ` && !!document.querySelector(${JSON.stringify(readySelector)})` : ''),
+        5000,
+      )
+      .catch(() => false)
+    if (ok) return true
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
+}
+
 export async function tabIdForHref(sw, href) {
   const matches = await sw.eval(
     `(async()=>(await chrome.tabs.query({})).filter(t=>t.url===${JSON.stringify(href)}).map(t=>t.id))()`,
@@ -294,8 +338,26 @@ export const CARD_SNAPSHOT = `(() => {
 export async function waitForCard(page, ms = CLASSIFY_WAIT_MS) {
   const deadline = Date.now() + ms
   let last = null
+  let consecutiveEvalFailures = 0
   while (Date.now() < deadline) {
-    last = await page.eval(CARD_SNAPSHOT).catch(() => null)
+    let snapshot
+    try {
+      // Short per-poll timeout: on a dead renderer every eval waits out its own
+      // timeout, so a long one plus a high failure threshold cannot fit inside
+      // the card budget and the crash is never detected before it expires.
+      snapshot = await page.eval(CARD_SNAPSHOT, 2000)
+      if (snapshot && snapshot.__error) throw new Error(snapshot.__error)
+      consecutiveEvalFailures = 0
+    } catch {
+      snapshot = null
+      consecutiveEvalFailures += 1
+      // A single failure can be a navigation in flight; a few in a row means the
+      // renderer is gone. Confirm with a health probe before calling it.
+      if (consecutiveEvalFailures >= 3 && !(await pageIsHealthy(page))) {
+        return { ...(last ?? {}), crashed: true }
+      }
+    }
+    if (snapshot) last = snapshot
     if (last?.state && last.state !== 'loading') return last
     await new Promise((r) => setTimeout(r, 100))
   }

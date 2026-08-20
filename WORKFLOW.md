@@ -49,8 +49,17 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 
 Two commands, one for each provider. `pnpm qa:runtime` checks WebGPU evidence,
 cold start, the chosen provider and its fallback reason, repeat runs on one
-session, 4-tab concurrency, a burst backlog, the hostile-CSS page, and console
-hygiene — then prints PASS/FAIL per check and exits non-zero if any failed.
+session, 4-tab concurrency, a burst backlog, the hostile-CSS page, the live
+dispose/rebuild path, and console hygiene — then prints PASS/FAIL per check and
+exits non-zero if any failed.
+
+**Provider equivalence** is a two-step gate: record every fixture's verdict on
+one provider, then assert the other reproduces it exactly.
+
+```
+pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
+pnpm qa --no-webgpu  && pnpm qa:runtime --expect wasm   --compare /tmp/webgpu.json
+```
 
 ```
 pnpm qa                            # WebGPU available
@@ -59,6 +68,18 @@ pnpm qa:runtime --expect webgpu
 pnpm qa --no-webgpu                # WebGPU genuinely unavailable
 pnpm qa:runtime --expect wasm
 ```
+
+**Provider equivalence** is checked by recording every fixture's verdict on one
+provider and asserting the other reproduces it exactly:
+
+```
+pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
+pnpm qa --no-webgpu  && pnpm qa:runtime --expect wasm   --compare /tmp/webgpu.json
+```
+
+The suite also exercises the live rebuild path (`model:load` → dispose → new
+session → classify), so the machinery the timeout-recovery paths depend on is
+proven in a real browser rather than only against fakes.
 
 It runs in **~18s** and is deterministic: every check is local, so there is no
 network in the default path. Two checks are opt-in because they are slow or
@@ -73,11 +94,28 @@ flaky, and both are already covered elsewhere:
   outside our control. The local `/hostile` fixture covers the same failure mode
   deterministically. Run it before a release, not on every loop.
 
+**A crashed renderer is recovered, not reported as a failure.** Chrome's
+"Aw, Snap!" keeps the CDP target alive, so evaluating in it hangs — with a
+hard-coded 30s per call and a high failure threshold, a crash could never be
+detected inside a card budget and simply looked like a classification that never
+settled (measured: 60s of polling a dead tab). `waitForCard` now polls with a
+short per-call timeout, confirms with a health probe, and returns `crashed`
+within ~9s; the suite reloads the tab and retries the request once. `eval`/`send`
+accept a per-call timeout — rule 3 applies to every call, not once globally.
+
 **Keep it fast and deterministic.** Budgets are proportionate to measured times
 (1.2–1.8s warm on WebGPU, 2.4–3.0s on CPU/WASM), so a regression fails in
 seconds instead of hanging. Probe tabs all carry `?qa=…` and the fixture tab is
 matched on an empty query string — matching on pathname alone silently selected
-a probe tab and classified into it (rule 4, the hard way).
+a probe tab and classified into it (rule 4, the hard way). Console hygiene
+counts only what the current run produced: each context replays its buffer on
+attach (rule 8), so the suite snapshots that first and diffs against it.
+
+**A crashed renderer is recovered, not misreported.** Chrome's "Aw, Snap!"
+leaves the CDP target alive, so a dead tab used to look exactly like a
+classification that never settled and burned the whole budget before failing for
+the wrong reason. `waitForCard` now returns `{crashed: true}` within ~9s, and the
+suite reloads the tab and retries the request once.
 
 **Do not trust a launch flag to disable WebGPU.** `--disable-features=WebGPU`
 does *not* work — `requestAdapter()` still resolves under it. `--disable-gpu`
@@ -117,7 +155,12 @@ document, options page and content scripts — which is the whole point.
    SIGTERM discards buffered stdout, which silently produced empty runs.
 2. The MV3 service worker idles out constantly. Never assume its target exists —
    wake it via the options page and poll for it.
-3. Put a timeout on every CDP call so a hang fails loudly instead of hanging.
+3. Put a timeout on every CDP call so a hang fails loudly instead of hanging —
+   and make it *per call*. `send`/`eval` hard-coded 30s and silently ignored the
+   timeout their callers passed, so a liveness probe that asked for 2s waited
+   half a minute and crash detection could never fire inside its budget.
+   `eval` also reports page exceptions as a `{__error}` value rather than a
+   rejection, so callers probing liveness must check for that shape.
 4. Give probe tabs a unique URL marker. Several tabs share a prefix and
    `tabs.query()` returns the first match, which silently sends messages to the
    wrong tab.
