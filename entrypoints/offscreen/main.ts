@@ -93,7 +93,6 @@ function startFactory(): Promise<ClassifierRepository> {
 // neither provider could initialize). Every classify surfaces the reason to
 // the user; this guard only stops an unhandled-rejection report.
 function trackFactory(): Promise<ClassifierRepository> {
-  blockedForUpdate = false
   const p = startFactory().then((repository) => {
     runtimeStats.sessionCreations += 1
     runtimeStats.diagnostics = repository.runtimeDiagnostics
@@ -136,6 +135,7 @@ function serialiseLifecycle<T>(work: () => Promise<T>): Promise<T> {
 // Either way, caching it means every later classify fails forever, so rebuild
 // rather than handing the corpse out again.
 async function activeClassifier(): Promise<ClassifierRepository> {
+  // A deliberate block must surface its reason, never trigger a rebuild.
   if (blockedForUpdate) return classifierPromise()
   let repo: ClassifierRepository
   try {
@@ -167,32 +167,53 @@ function forgetDiagnostics(): void {
   publishRuntimeStats()
 }
 
-function recoverFromWedge(): Promise<void> {
+/**
+ * The single way the classifier is torn down and replaced.
+ *
+ * Deliberately never waits for the queue to drain. Draining from here is a
+ * circular wait: the shared promise is what a queued task resolves its
+ * repository through, so a task still in the queue cannot finish until this
+ * function installs a new promise, and this function cannot finish until that
+ * task drains. Disposing is the better tool anyway — it terminates the worker,
+ * which is the only thing that actually stops an in-flight ONNX run, and which
+ * rejects every outstanding request cleanly. Callers get an error instead of a
+ * hang, and the queue's tail advances on its own.
+ */
+function replaceClassifier(reason: string, options: { block?: boolean } = {}): Promise<void> {
+  const block = options.block === true
   return serialiseLifecycle(async () => {
     const previous = classifier.current()
+    // Install the placeholder *first*: until it is in place a request can slip
+    // in and rebuild a classifier this teardown is about to discard.
+    const placeholder = Promise.reject<ClassifierRepository>(new Error(reason))
+    placeholder.catch(() => {})
+    blockedForUpdate = block
+    classifier.replace(placeholder)
     forgetDiagnostics()
+
     const old = await previous?.catch(() => null)
     if (old?.dispose) {
       try {
-        // Terminates the worker, which is what actually stops the wedged run.
         await old.dispose()
+        log.debug('released the previous classifier session')
       } catch (err) {
-        log.warn('failed to release the wedged session', String(err))
+        // Tolerated: a release can fail on a lost device or an already-gone
+        // session, and the worker is terminated either way.
+        log.warn('failed to release the previous session', String(err))
       }
     }
-    // Deliberately lazy, matching the cold-start design: the likely cause of a
-    // wedge is memory pressure, so rebuilding a full session immediately would
-    // compete with the very condition that caused it. The next request builds
-    // one through `activeClassifier`.
-    const idle = Promise.reject<ClassifierRepository>(
-      new Error('Classifier is restarting after a wedged run.'),
-    )
-    idle.catch(() => {})
-    classifier.replace(idle)
-    // Only now, with the old session gone, is it safe to take work again.
+    // Safe unconditionally now — the old session is gone, so nothing the queue
+    // starts next can overlap it.
     classifyQueue?.reset()
-    log.info('classifier released after a wedged run; it will rebuild on the next request')
+    log.info('classifier released', { reason })
   })
+}
+
+// Deliberately lazy: the likely cause of a wedge is memory pressure, so
+// rebuilding a full session immediately would compete with the very condition
+// that caused it. `activeClassifier` builds one on the next request.
+function recoverFromWedge(): Promise<void> {
+  return replaceClassifier('Classifier is restarting after a wedged run.')
 }
 
 // Every classification goes through this queue so overlapping requests can
@@ -212,7 +233,9 @@ classifyQueue = createClassifyQueue(
       try {
         return await repo.classify(text)
       } finally {
-        runtimeStats.inFlight -= 1
+        // Clamped: a teardown zeroes this, and the disposal then rejects the
+        // in-flight request, so this decrement can arrive after that reset.
+        runtimeStats.inFlight = Math.max(0, runtimeStats.inFlight - 1)
         publishRuntimeStats()
       }
     }),
@@ -238,51 +261,25 @@ publishRuntimeStats()
 
 log.info('offscreen booted')
 
-// Replacing the repository without releasing the old session leaks the model
-// weights and lets an in-flight inference overlap the new session's setup —
-// the concurrency class the queue exists to prevent. Swap only once the queue
-// has drained, and release what we are dropping.
 async function reinitialiseClassifier(): Promise<void> {
   log.info('model:load received — re-initialising classifier', {
     queued: classifyQueue?.pending() ?? 0,
   })
-  // Captured before `classifier.replace(next)` below. Reading it inside the
-  // callback deadlocks: the replace runs synchronously, so by the time the
-  // callback executes `classifier.current()` is the very promise it is inside,
-  // and awaiting it waits on itself forever.
-  const previous = classifier.current()
-  const next = serialiseLifecycle(async () => {
-    await classifyQueue?.drain()
-    const old = await previous?.catch(() => null)
-    forgetDiagnostics()
-    if (old?.dispose) {
-      try {
-        await old.dispose()
-        log.debug('released the previous classifier session')
-      } catch (err) {
-        log.warn('failed to release the previous session', String(err))
-      }
-    }
-    // Resetting before the drain resolved threw away the serialization tail
-    // while a task was still running on the old session, so the next request
-    // chained onto a fresh tail and overlapped it.
-    if (classifyQueue?.isPoisoned()) classifyQueue.reset()
-    return trackFactory()
-  })
+  await replaceClassifier('Classifier is reloading after a model change.')
+  // This is the operation that lifts a block, so it says so explicitly rather
+  // than relying on a side effect of starting a factory.
+  blockedForUpdate = false
+  // Rebuilt eagerly, unlike wedge recovery: a model:load means the user just
+  // installed something and is about to use it.
+  const next = trackFactory()
   classifier.replace(next)
   next.catch((err) => log.warn('classifier unavailable', String(err)))
 }
 
 async function shutdownClassifier(): Promise<void> {
-  const previous = classifier.current()
-  await classifyQueue?.drain()
-  const old = await previous?.catch(() => null)
-  if (old?.dispose) await old.dispose()
-  forgetDiagnostics()
-  const blocked = Promise.reject<ClassifierRepository>(new Error('SlopHammer update in progress.'))
-  blocked.catch(() => {})
-  blockedForUpdate = true
-  classifier.replace(blocked)
+  // Routed through the same primitive, so it can no longer race a model:load
+  // and orphan a live worker while the migration clears OPFS underneath it.
+  await replaceClassifier('SlopHammer update in progress.', { block: true })
 }
 
 function requestStorageClear(): Promise<void> {

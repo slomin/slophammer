@@ -357,3 +357,28 @@ describe('createClassifyQueue — recovery bookkeeping', () => {
     expect(queue.pending()).toBe(0)
   })
 })
+
+
+describe('createClassifyQueue — reset must not strand a waiting caller', () => {
+  it('rejects a task still waiting for its turn when the queue is reset', async () => {
+    const gate = deferred<string>()
+    const queue = createClassifyQueue(
+      (text: string) => (text === 'hold' ? gate.promise : Promise.resolve(text)),
+      { taskTimeoutMs: 60_000 },
+    )
+    queue.run('hold').catch(() => {})
+    const waiting = queue.run('waiting').then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+
+    queue.reset()
+    const outcome = await Promise.race([
+      waiting,
+      new Promise((r) => setTimeout(() => r('STRANDED'), 300)),
+    ])
+    expect(outcome).not.toBe('STRANDED')
+    expect((outcome as Error)?.message).toMatch(/abandoned/i)
+    gate.resolve('hold')
+  })
+})

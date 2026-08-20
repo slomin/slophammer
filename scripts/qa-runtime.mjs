@@ -307,13 +307,17 @@ try {
   probe?.close()
   // null means "could not tell" — distinct from "WebGPU is unavailable", which
   // would make the cross-check assert the wrong provider on a healthy machine.
-  browserWebGpu = adapter === null ? null : adapter.adapter === true && !report.disabled
+  // `eval` reports page exceptions as a `{__error}` value rather than a
+  // rejection, so an unusable probe is not always null.
+  const probeUsable = adapter !== null && !adapter.__error && typeof adapter.adapter === 'boolean'
+  browserWebGpu = probeUsable ? adapter.adapter === true && !report.disabled : null
   // Assert the two independent sources agree. Passing on "chrome://gpu mentions
   // WebGPU" was unfalsifiable — every Chrome mentions it either way.
   const agree = report.disabled === !(adapter?.adapter === true)
+
   record(
     'webgpu-evidence',
-    report.mentioned && adapter !== null && agree,
+    report.mentioned && probeUsable && agree,
     `chrome://gpu disabled=${report.disabled}, offscreen adapter=${adapter?.adapter}, agree=${agree}`,
   )
 } catch (error) {
@@ -572,16 +576,28 @@ if (RECORD || COMPARE) {
         // 49 vs 50 on a numerically identical model. The verdict must match
         // exactly; the distribution is allowed one point of rounding drift.
         const drift = (x, y) => Math.abs(Number(x) - Number(y))
-        const bucketDrift = (a.buckets ?? []).map((v, i) => drift(v, (b.buckets ?? [])[i]))
-        const worst = Math.max(drift(a.percent, b.percent), ...bucketDrift, 0)
-        if (a.verdict !== b.verdict || worst > EQUIVALENCE_TOLERANCE_PP) {
+        const shapeOk =
+          Array.isArray(a.buckets) &&
+          Array.isArray(b.buckets) &&
+          a.buckets.length === b.buckets.length &&
+          a.percent != null &&
+          b.percent != null
+        const bucketDrift = shapeOk ? a.buckets.map((v, i) => drift(v, b.buckets[i])) : []
+        const worst = shapeOk ? Math.max(drift(a.percent, b.percent), ...bucketDrift, 0) : NaN
+        // NaN > tolerance is false, so a malformed comparison would silently
+        // pass; treat an unusable shape as a mismatch explicitly.
+        if (!shapeOk || Number.isNaN(worst)) {
+          mismatches.push(
+            `section ${section}: cannot compare — ${JSON.stringify(a)} vs ${JSON.stringify(b)}`,
+          )
+        } else if (a.verdict !== b.verdict || worst > EQUIVALENCE_TOLERANCE_PP) {
           mismatches.push(
             `section ${section}: ${baseline.provider} ${a.verdict}/${a.percent}/${JSON.stringify(a.buckets)}` +
               ` vs ${diag?.executionProvider} ${b.verdict}/${b.percent}/${JSON.stringify(b.buckets)}` +
               ` (worst drift ${worst}pp)`,
           )
         }
-        maxDrift = Math.max(maxDrift, worst)
+        if (Number.isFinite(worst)) maxDrift = Math.max(maxDrift, worst)
       }
       record(
         'equivalence',

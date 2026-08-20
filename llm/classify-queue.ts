@@ -40,7 +40,8 @@ export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 export const QUEUE_POISONED_MESSAGE =
   'Classifier is no longer accepting work — a previous run timed out and the session is being rebuilt.'
 
-const QUEUE_ABANDONED_MESSAGE = 'Classifier request was abandoned while the session was rebuilt.'
+export const QUEUE_ABANDONED_MESSAGE =
+  'Classifier request was abandoned while the session was rebuilt.'
 
 export function createClassifyQueue<T, R>(
   task: (input: T) => Promise<R> | R,
@@ -99,6 +100,10 @@ export function createClassifyQueue<T, R>(
       generation += 1
       pending = 0
       tail = Promise.resolve()
+      // Reject rather than drop: a waiting task's `started` never resolves, so
+      // clearing the set alone would leave its caller waiting on a promise that
+      // can no longer settle from either side.
+      for (const abort of waiting) abort(new Error(QUEUE_ABANDONED_MESSAGE))
       waiting.clear()
     },
 

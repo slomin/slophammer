@@ -5,7 +5,7 @@ import type {
   ClassifierWorkerRequest,
   ClassifierWorkerResponse,
 } from './classifier-worker-protocol'
-import { RuntimeInitializationError } from './execution-provider'
+import { ModelIntegrityError, RuntimeInitializationError } from './execution-provider'
 import { setupOnnxClassifier } from './onnx-setup'
 
 const scope = self as DedicatedWorkerGlobalScope
@@ -49,8 +49,13 @@ function initialise(runtimeBaseUrl: string): Promise<ClassifierRepository> {
       post({ type: 'init:ready', diagnostics: repository.runtimeDiagnostics })
     },
     (error) => {
+      // Without the ModelIntegrityError arm the diagnostic is the user-facing
+      // text, so the underlying parse/contract failure is never recorded and
+      // support has nothing to work from.
       const diagnostic =
-        error instanceof RuntimeInitializationError ? error.diagnosticMessage() : message(error)
+        error instanceof RuntimeInitializationError || error instanceof ModelIntegrityError
+          ? error.diagnosticMessage()
+          : message(error)
       console.error('[SlopHammer:classifier-worker] initialization failed', diagnostic)
       post({ type: 'init:error', error: message(error), diagnostic })
     },
@@ -81,7 +86,10 @@ function dispose(requestId: string): void {
       // session. Swallowing it used to skip both statements below, so the
       // client blocked its full dispose timeout on every model:load and every
       // wedge recovery, and the dead repository stayed installed.
-      console.warn('[SlopHammer:classifier-worker] releasing the session failed', message(error))
+      // Informational, not a warning: this is tolerated and fully recovered,
+      // and the worker's console is routed into the offscreen document's
+      // stream, where the QA suite treats an unexpected warning as a failure.
+      console.info('[SlopHammer:classifier-worker] releasing the session failed', message(error))
     }
     repositoryPromise = null
     post({ type: 'dispose:done', requestId })

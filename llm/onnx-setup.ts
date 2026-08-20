@@ -154,7 +154,11 @@ export async function setupOnnxClassifier(
         sessionOutputNames: session.outputNames,
       })
     } catch (error) {
-      await session.release()
+      // Swallow a failing release: letting it propagate would replace the
+      // ModelIntegrityError with the release error, and the fallback guard that
+      // keys off the type would miss — burning a second full session build to
+      // fail identically.
+      await session.release().catch(() => {})
       // Reconciling the contract with the session's outputs is about the model,
       // not the provider: retrying on the fallback rebuilds a full session only
       // to fail identically.
@@ -178,7 +182,7 @@ export async function setupOnnxClassifier(
         runtimeDiagnostics,
       })
     } catch (error) {
-      await session.release()
+      await session.release().catch(() => {})
       throw error
     }
   }

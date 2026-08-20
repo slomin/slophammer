@@ -174,6 +174,10 @@ export async function selectExecutionProvider<T, TAdapter = unknown>(
       fallbackReason,
     }
   } catch (error) {
+    // Same guard as the WebGPU branch: on a CPU-only machine this is the *only*
+    // attempt, so wrapping here would discard the type, its cause, and its
+    // diagnostic for the entire fleet without a WebGPU adapter.
+    if (error instanceof ModelIntegrityError) throw error
     throw new RuntimeInitializationError(fallbackReason, errorMessage(error))
   }
 }

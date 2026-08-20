@@ -36,10 +36,8 @@ const CHROME_PROFILE = resolve(
     resolve(process.env.HOME ?? '', '.slophammer-chrome-profile'),
 )
 const BUILD_OUT = resolve(repoRoot, '.output/chrome-mv3')
-// `public` is deliberately absent: wxt.config.ts deletes and re-copies
-// public/ort at module load without preserving timestamps, so every `wxt
-// prepare` restamps it and the staleness check would rebuild on every run.
 const BUILD_INPUTS = [
+  'public',
   'background',
   'content',
   'entrypoints',
@@ -69,7 +67,14 @@ function readPort(name, fallback) {
   return value
 }
 
+// wxt.config.ts deletes and re-copies public/ort at module load without
+// preserving timestamps, so every `wxt prepare` restamps it and the staleness
+// check would rebuild on every run. Skip that one directory rather than all of
+// `public`, which also holds the hand-authored icons a rebuild must notice.
+const STALENESS_EXCLUDES = [resolve(repoRoot, 'public/ort')]
+
 function latestMtime(path) {
+  if (STALENESS_EXCLUDES.includes(path)) return 0
   if (!existsSync(path)) return 0
   const stat = statSync(path)
   if (!stat.isDirectory()) return stat.mtimeMs
