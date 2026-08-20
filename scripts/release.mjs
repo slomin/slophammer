@@ -18,18 +18,18 @@ const sha = execSync('git rev-parse --short HEAD').toString().trim()
 const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16)
 writeFileSync(
   resolve(RELEASE_DIR, 'README.txt'),
-  `Slop Hammer — current release
+  `SlopHammer — current release
 Built from ${sha} at ${stamp}
 
 Load this in Chrome:
   1. chrome://extensions/
   2. Enable "Developer mode" (top-right).
-  3. If an older Slop Hammer is installed, REMOVE it first (not reload).
+  3. Pre-v1 profiles migrate automatically; do not restore the retired model.
   4. Click "Load unpacked" and select the "unpacked/" folder in this directory.
 
 First-run: the options page opens automatically. Install the official model
 from Hugging Face, or use the manual .zip fallback if needed. Then select
-75+ chars on any http/https page → right-click → Check with Slop Hammer.
+40+ words on any http/https page → right-click → Check with SlopHammer.
 
 Toolbar icon opens the options page.
 

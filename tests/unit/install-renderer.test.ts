@@ -67,6 +67,17 @@ describe('renderInstall — empty state', () => {
     root = document.getElementById('install')!
   })
 
+  it('disables every install entry point while migration is blocking', () => {
+    const handlers = makeHandlers()
+    renderInstall(root, { kind: 'empty' }, handlers, { blocked: true })
+
+    expect(root.dataset.blocked).toBe('true')
+    expect([...root.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')]
+      .every((control) => control.disabled)).toBe(true)
+    root.querySelector<HTMLButtonElement>('[data-testid="install-hosted"]')!.click()
+    expect(handlers.onInstallHosted).not.toHaveBeenCalled()
+  })
+
   it('renders both CTAs with Hugging Face as the primary', () => {
     renderInstall(root, { kind: 'empty' }, makeHandlers())
     const hosted = root.querySelector<HTMLButtonElement>('[data-testid="install-hosted"]')!
@@ -204,6 +215,22 @@ describe('renderInstall — installed + update check', () => {
       makeHandlers(),
     )
     expect(root.querySelector('[data-testid="update-error"]')?.textContent).toContain('no network')
+  })
+
+  it('disables update, replace, and reinstall controls while migration is blocking', () => {
+    const handlers = makeHandlers()
+    renderInstall(
+      root,
+      installed({ updateStatus: 'available', pendingUpdate: PENDING }),
+      handlers,
+      { blocked: true },
+    )
+
+    for (const testId of ['check-updates', 'replace-file', 'install-update', 'reinstall']) {
+      expect(root.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`)!.disabled).toBe(true)
+    }
+    expect(root.querySelector<HTMLInputElement>('[data-testid="replace-file-input"]')!.disabled)
+      .toBe(true)
   })
 })
 

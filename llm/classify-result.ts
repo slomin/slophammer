@@ -1,13 +1,14 @@
-export type Verdict = 'ai' | 'mixed' | 'human'
+export type CanonicalVerdict = 'flagged' | 'near-threshold' | 'not-flagged'
 
 export type RawProbs = [number, number, number, number]
 
 export interface ClassifyResult {
   probs: RawProbs
   rawPct: [number, number, number, number]
-  aiScore: number
-
-  verdict: Verdict
+  bucketLabels: [string, string, string, string]
+  extLlr: number
+  threshold: number
+  verdict: CanonicalVerdict
 
   /** Tokens in the whole selection. */
   tokenCount: number
@@ -16,7 +17,7 @@ export interface ClassifyResult {
   truncated: boolean
 }
 
-export const RAW_CLASS_LABEL = ['Human', 'Lightly AI', 'Moderately AI', 'Heavily AI'] as const
+export const RAW_CLASS_LABEL = ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'] as const
 
 export function softmax(logits: readonly number[]): number[] {
   if (logits.length === 0) return []
@@ -34,10 +35,22 @@ export function argmax4(probs: RawProbs): 0 | 1 | 2 | 3 {
   return best
 }
 
-export function bucketFromArgmax(argmax: 0 | 1 | 2 | 3): Verdict {
-  if (argmax === 0) return 'human'
-  if (argmax === 3) return 'ai'
-  return 'mixed'
+const LOG_FLOOR = Number.MIN_VALUE
+
+export function computeExtLlr(probs: RawProbs): number {
+  const aiLike = Math.max(LOG_FLOOR, probs[2] + probs[3])
+  const humanBucket = Math.max(LOG_FLOOR, probs[0])
+  return Math.log(aiLike) - Math.log(humanBucket)
+}
+
+export function decideVerdict(
+  extLlr: number,
+  tau: number,
+  abstainBand: number,
+): CanonicalVerdict {
+  if (extLlr > tau) return 'flagged'
+  if (extLlr > tau - abstainBand) return 'near-threshold'
+  return 'not-flagged'
 }
 
 export function formatPct(value: number): string {

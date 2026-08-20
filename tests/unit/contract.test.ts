@@ -1,83 +1,54 @@
 import { describe, expect, it } from 'vitest'
-import {
-  CONTRACT_FILENAMES,
-  CORE_MODEL_FILES,
-  validateContract,
-} from '@/llm/contract'
+import { validateContract, validateSupportedContract } from '@/llm/contract'
+
+const supported = {
+  n_buckets: 4,
+  max_seq_length: 512,
+  preprocessing: 'trim+zw',
+  preprocessing_js: 'throw new Error("must never run")',
+  calibration: { tau: 3.8088, abstain_band: 1.5 },
+  labels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  pad_token_id: 0,
+  padding_side: 'left',
+  output_name: 'logits',
+  base_model: 'LiquidAI/LFM2.5-350M-Base',
+  version: 'SlopHammer 350M v0.1',
+}
 
 describe('validateContract', () => {
-  it('accepts a minimal valid contract', () => {
-    const c = { n_buckets: 4, max_seq_length: 512, lo_threshold: 0.1, hi_threshold: 0.9 }
-    expect(() => validateContract(c)).not.toThrow()
+  it('accepts the shipping contract and ignores documentation-only preprocessing_js', () => {
+    expect(() => validateContract(supported)).not.toThrow()
   })
 
-  it('accepts a full contract with optional fields', () => {
-    const c = {
-      n_buckets: 4,
-      max_seq_length: 512,
-      lo_threshold: 0.2,
-      hi_threshold: 0.8,
-      labels: ['Human', 'Lightly', 'Moderately', 'Heavily'],
-      pad_token_id: 0,
-      padding_side: 'left',
-      session_count: 1,
-      input_names: ['input_ids', 'attention_mask'],
-      output_name: 'logits',
-      base_model: 'gemma',
-      version: '4500',
-    }
-    expect(() => validateContract(c)).not.toThrow()
+  it.each([
+    ['preprocessing', { preprocessing: 'eval-js' }],
+    ['labels', { labels: ['Human'] }],
+    ['calibration', { calibration: undefined }],
+    ['calibration.tau', { calibration: { tau: '3.8', abstain_band: 1.5 } }],
+    ['calibration.abstain_band', { calibration: { tau: 3.8, abstain_band: -1 } }],
+    ['min_words', { min_words: 0 }],
+  ])('rejects invalid %s', (_name, patch) => {
+    expect(() => validateContract({ ...supported, ...patch })).toThrow()
   })
 
-  it('rejects null / undefined / non-object', () => {
-    expect(() => validateContract(null)).toThrow(/not an object/i)
-    expect(() => validateContract(undefined)).toThrow(/not an object/i)
-    expect(() => validateContract('{}')).toThrow(/not an object/i)
-  })
-
-  it('rejects n_buckets ≠ 4', () => {
-    expect(() =>
-      validateContract({ n_buckets: 2, max_seq_length: 512, lo_threshold: 0, hi_threshold: 1 }),
-    ).toThrow(/n_buckets/)
-  })
-
-  it('rejects missing/invalid max_seq_length', () => {
-    expect(() =>
-      validateContract({ n_buckets: 4, lo_threshold: 0, hi_threshold: 1 }),
-    ).toThrow(/max_seq_length/)
-    expect(() =>
-      validateContract({ n_buckets: 4, max_seq_length: 0, lo_threshold: 0, hi_threshold: 1 }),
-    ).toThrow(/max_seq_length/)
-  })
-
-  // The shipping model sets these, but nothing in the extension reads them,
-  // so their absence must not reject an otherwise-valid model.
-  it('accepts a contract without the calibration thresholds', () => {
-    expect(() => validateContract({ n_buckets: 4, max_seq_length: 512 })).not.toThrow()
-    expect(() =>
-      validateContract({ n_buckets: 4, max_seq_length: 512, hi_threshold: 0.9 }),
-    ).not.toThrow()
-  })
-
-  it('still rejects thresholds of the wrong type', () => {
-    expect(() =>
-      validateContract({ n_buckets: 4, max_seq_length: 512, lo_threshold: 'low' }),
-    ).toThrow(/lo_threshold/)
-    expect(() =>
-      validateContract({ n_buckets: 4, max_seq_length: 512, hi_threshold: [] }),
-    ).toThrow(/hi_threshold/)
+  it('accepts an optional 40-word contract floor', () => {
+    expect(() => validateContract({ ...supported, min_words: 40 })).not.toThrow()
   })
 })
-
-describe('constants', () => {
-  it('exports stable contract filenames', () => {
-    expect(CONTRACT_FILENAMES).toContain('slop_hammer_contract.json')
-    expect(CONTRACT_FILENAMES).toContain('seq_cls_contract.json')
+describe('validateSupportedContract', () => {
+  it('accepts only the exact supported artifact identity', () => {
+    expect(() => validateSupportedContract(supported)).not.toThrow()
   })
 
-  it('exports core model files including q4f16 onnx + tokenizer', () => {
-    expect(CORE_MODEL_FILES).toContain('tokenizer.json')
-    expect(CORE_MODEL_FILES).toContain('tokenizer_config.json')
-    expect(CORE_MODEL_FILES).toContain('model_q4f16.onnx')
+  it.each([
+    ['retired contract', { version: 'Slop Hammer 0.8B v0.1' }],
+    ['retired base model', { base_model: 'Qwen/Qwen3.5-0.8B-Base' }],
+    ['different padding', { pad_token_id: 248044 }],
+    ['future word floor', { min_words: 41 }],
+    ['changed labels', { labels: ['Human', 'Lightly AI', 'Moderately AI', 'Heavily AI'] }],
+    ['changed calibration tau', { calibration: { tau: 3.8089, abstain_band: 1.5 } }],
+    ['changed abstain band', { calibration: { tau: 3.8088, abstain_band: 1.5001 } }],
+  ])('rejects %s', (_name, patch) => {
+    expect(() => validateSupportedContract({ ...supported, ...patch })).toThrow(/supported|match|expected/i)
   })
 })

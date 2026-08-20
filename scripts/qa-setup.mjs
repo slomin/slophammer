@@ -136,14 +136,14 @@ async function main() {
 
   console.log('')
   console.log('================================================================')
-  console.log('  Slop Hammer — manual QA ready')
+  console.log('  SlopHammer — manual QA ready')
   console.log('================================================================')
   console.log(`  test page : http://localhost:${TEST_PAGE_PORT}/`)
   console.log(`  CDP       : http://localhost:${CDP_PORT}`)
   console.log(`  profile   : ${process.env.HOME}/.slophammer-chrome-profile`)
   console.log('')
   console.log('  Select a paragraph on the test page → right-click → Check with')
-  console.log('  Slop Hammer. First run: drop your model zip on the options page.')
+  console.log('  SlopHammer. First run: install the verified 350M model from the options page.')
   console.log('================================================================')
 }
 

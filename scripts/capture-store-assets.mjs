@@ -19,6 +19,18 @@ const HEIGHT = 800
 const LONG_TEXT =
   `In today's rapidly evolving digital landscape, leveraging artificial intelligence to drive transformative business outcomes has become not just an advantage, but a necessity. Organizations that proactively embrace cutting-edge AI solutions are uniquely positioned to unlock unprecedented value, streamline operational efficiency, and foster a culture of continuous innovation.`
 
+const SYNTHETIC_RESULT = {
+  probs: [0.05, 0.1, 0.15, 0.7],
+  rawPct: [5, 10, 15, 70],
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 4.2,
+  threshold: 3.8088,
+  verdict: 'flagged',
+  tokenCount: 58,
+  analysedTokens: 58,
+  truncated: false,
+}
+
 function chromeExecutablePath() {
   const binPathFile = path.resolve('chrome-for-testing/bin-path.txt')
   if (!existsSync(binPathFile)) return undefined
@@ -50,21 +62,13 @@ async function dispatchClassification(context, page, text) {
 
   const requestId = 'store-assets-' + Date.now()
   await worker.evaluate(
-    async ([tabId, requestId, text]) => {
+    async ([tabId, requestId, text, result]) => {
       await chrome.storage.local.set({
         'slophammer-settings': {
           resultDetail: 'basic',
           theme: 'light',
         },
       })
-      await chrome.offscreen
-        .createDocument({
-          url: 'offscreen.html',
-          reasons: [chrome.offscreen.Reason.WORKERS],
-          justification: 'store screenshot capture',
-        })
-        .catch(() => {})
-
       const startedMsg = {
         type: 'classify:started',
         requestId,
@@ -80,21 +84,9 @@ async function dispatchClassification(context, page, text) {
           await new Promise((r) => setTimeout(r, 100))
         }
       }
-      for (let i = 0; i < 50; i++) {
-        try {
-          await chrome.runtime.sendMessage({
-            type: 'classify:run',
-            requestId,
-            tabId,
-            text,
-          })
-          break
-        } catch {
-          await new Promise((r) => setTimeout(r, 100))
-        }
-      }
+      await chrome.tabs.sendMessage(tabId, { type: 'classify:result', requestId, tabId, result })
     },
-    [tabId, requestId, text],
+    [tabId, requestId, text, SYNTHETIC_RESULT],
   )
 }
 
@@ -167,7 +159,7 @@ async function main() {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Slop Hammer store capture</title>
+  <title>SlopHammer store capture</title>
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
@@ -181,8 +173,7 @@ async function main() {
     main { max-width: 760px; }
     .brand {
       color: #d94e1f;
-      letter-spacing: .12em;
-      text-transform: uppercase;
+      letter-spacing: .08em;
       font-size: 12px;
       font-weight: 700;
       margin-bottom: 28px;
@@ -211,10 +202,10 @@ async function main() {
 </head>
 <body>
   <main>
-    <div class="brand">slop / hammer</div>
+    <div class="brand">SlopHammer</div>
     <h1>Check selected text without sending it to a remote analysis service.</h1>
     <p id="sample">${LONG_TEXT}</p>
-    <div class="note">Select text, right-click, and choose Check with Slop Hammer.</div>
+    <div class="note">Select at least 40 words, right-click, and choose Check with SlopHammer.</div>
   </main>
 </body>
 </html>`,

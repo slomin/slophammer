@@ -1,14 +1,31 @@
 import type { ClassifyResult } from '@/llm/classify-result'
-import type { ExtensionMessage } from '@/messaging/protocol'
+import type {
+  ClassifyErrorMessage,
+  ClassifyResultMessage,
+  ClassifyStartedMessage,
+  ModelStatusMessage,
+  SelectionTooShortMessage,
+} from '@/messaging/protocol'
 
 export type CardState =
   | { kind: 'idle' }
-  | { kind: 'loading'; requestId: string; preview: string; wordCount: number }
-  | { kind: 'ready'; requestId: string; preview: string; wordCount: number; result: ClassifyResult }
+  | { kind: 'loading'; requestId: string; preview: string; wordCount: number; startedAtMs: number }
+  | {
+      kind: 'ready'
+      requestId: string
+      preview: string
+      wordCount: number
+      result: ClassifyResult
+      durationMs: number
+    }
   | { kind: 'error'; requestId: string | null; preview: string; wordCount: number; error: string }
 
 export type CardAction =
-  | ExtensionMessage
+  | (ClassifyStartedMessage & { startedAtMs: number })
+  | (ClassifyResultMessage & { finishedAtMs: number })
+  | ClassifyErrorMessage
+  | ModelStatusMessage
+  | SelectionTooShortMessage
   | { type: 'dismiss' }
   | { type: 'classify:timeout'; requestId: string }
 
@@ -35,6 +52,7 @@ export function reduceCardState(state: CardState, action: CardAction): CardState
         requestId: action.requestId,
         preview: action.preview,
         wordCount: action.wordCount,
+        startedAtMs: action.startedAtMs,
       }
 
     case 'classify:result':
@@ -46,11 +64,20 @@ export function reduceCardState(state: CardState, action: CardAction): CardState
         preview: state.preview,
         wordCount: state.wordCount,
         result: action.result,
+        durationMs: Math.max(0, action.finishedAtMs - state.startedAtMs),
+      }
+
+    case 'selection:too-short':
+      return {
+        kind: 'error',
+        requestId: null,
+        preview: '',
+        wordCount: action.wordCount,
+        error: `Too short to judge — select at least ${action.minWords} words (${action.wordCount} selected)`,
       }
 
     case 'classify:error':
-      if (state.kind === 'idle') return state
-      if (state.kind === 'loading' && state.requestId !== action.requestId) return state
+      if (state.kind !== 'loading' || state.requestId !== action.requestId) return state
       return {
         kind: 'error',
         requestId: state.requestId,

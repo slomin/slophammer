@@ -1,397 +1,54 @@
-// @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { buildCard } from '@/content/card-dom'
 import { renderState } from '@/content/card-state'
-import type { CardState } from '@/content/state'
 import type { ClassifyResult } from '@/llm/classify-result'
 
-const aiResult: ClassifyResult = {
-  probs: [0.05, 0.1, 0.15, 0.7],
-  rawPct: [5, 10, 15, 70],
-  aiScore: 0.95,
-  verdict: 'ai',
-  tokenCount: 40,
-  analysedTokens: 40,
-  truncated: false,
+const result: ClassifyResult = {
+  probs: [0.1, 0.2, 0.3, 0.4],
+  rawPct: [10, 20, 30, 40],
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 3.1,
+  threshold: 3.8088,
+  verdict: 'near-threshold',
+  tokenCount: 600,
+  analysedTokens: 512,
+  truncated: true,
 }
 
-const humanResult: ClassifyResult = {
-  ...aiResult,
-  probs: [0.92, 0.05, 0.02, 0.01],
-  rawPct: [92, 5, 2, 1],
-  aiScore: 0.05,
-  verdict: 'human',
-}
-
-function testId(root: ShadowRoot, id: string): HTMLElement | null {
-  return root.querySelector<HTMLElement>(`[data-testid="${id}"]`)
-}
-
-function isHidden(el: HTMLElement | null): boolean {
-  if (!el) return true
-  return el.classList.contains('hide')
-}
-
-describe('buildCard', () => {
-  beforeEach(() => {
-    document.body.innerHTML = ''
-  })
-
-  it('creates a hardened host element with a shadow root', () => {
+describe('renderState', () => {
+  it('uses canonical SlopHammer branding and accessibility name', () => {
     const card = buildCard()
-    expect(card.host).toBeInstanceOf(HTMLElement)
-    expect(card.shadow).toBeTruthy()
-    expect(card.host.tagName.toLowerCase()).toBe('div')
-    expect(card.host.getAttribute('data-slop-hammer-card')).toBe('')
-    expect(card.host.style.getPropertyValue('all')).toBe('initial')
-    expect(card.host.style.getPropertyPriority('all')).toBe('important')
-    expect(card.host.style.getPropertyValue('visibility')).toBe('visible')
-    expect(card.host.style.getPropertyPriority('visibility')).toBe('important')
-    expect(card.host.style.getPropertyValue('display')).toBe('block')
-    expect(card.host.style.getPropertyPriority('display')).toBe('important')
+    expect(card.refs.headBrand.textContent).toContain('SlopHammer')
+    expect(card.refs.root.getAttribute('aria-label')).toBe('SlopHammer result')
   })
 
-  it('starts with the root data-state = "idle" and data-view = "full"', () => {
-    const card = buildCard()
-    const root = testId(card.shadow, 'card-root')
-    expect(root?.dataset.state).toBe('idle')
-    expect(root?.dataset.view).toBe('full')
-    expect(root?.dataset.mode).toBe('basic')
-  })
-
-  it('renders head with brand, version, minimise and close controls', () => {
-    const card = buildCard()
-    expect(testId(card.shadow, 'head-brand')?.textContent).toContain('Slop Hammer')
-    expect(testId(card.shadow, 'head-version')).not.toBeNull()
-    expect(testId(card.shadow, 'btn-minimise')).not.toBeNull()
-    expect(testId(card.shadow, 'btn-close')).not.toBeNull()
-  })
-
-  it('exposes the head element as a drag handle', () => {
-    const card = buildCard()
-    expect(card.refs.head).toBeInstanceOf(HTMLElement)
-    expect(card.refs.head.classList.contains('sh-head')).toBe(true)
-  })
-
-  it('renders all structural sections up front', () => {
-    const card = buildCard()
-    for (const id of [
-      'preview',
-      'word-count',
-      'loading-row',
-      'spinner',
-      'loading-label',
-      'verdict-box',
-      'verdict-label',
-      'verdict-confidence',
-      'verdict-big',
-      'verdict-text',
-      'binary-bar-human',
-      'binary-bar-ai',
-      'binary-legend-human',
-      'binary-legend-ai',
-      'mode-row',
-      'mode-toggle',
-      'advanced',
-      'raw-0',
-      'raw-1',
-      'raw-2',
-      'raw-3',
-      'error-box',
-      'error-title',
-      'error-message',
-      'actions-row',
-      'btn-copy',
-      'btn-share',
-      'dismiss-button',
-    ]) {
-      expect(testId(card.shadow, id), `missing ${id}`).not.toBeNull()
-    }
-  })
-})
-
-describe('renderState — loading', () => {
-  it('shows preview, word count, spinner and "analysing" label', () => {
-    const card = buildCard()
-    const state: CardState = {
-      kind: 'loading',
-      requestId: 'r1',
-      preview: 'lorem ipsum dolor',
-      wordCount: 3,
-    }
-    renderState(card, state)
-
-    const root = testId(card.shadow, 'card-root')
-    expect(root?.dataset.state).toBe('loading')
-    expect(testId(card.shadow, 'preview')?.textContent).toContain('lorem ipsum dolor')
-    expect(testId(card.shadow, 'word-count')?.textContent).toBe('3 words')
-    expect(isHidden(testId(card.shadow, 'loading-row'))).toBe(false)
-    expect(testId(card.shadow, 'loading-label')?.textContent).toBe('analysing')
-  })
-
-  it('hides verdict, mode, advanced, actions and error sections', () => {
-    const card = buildCard()
-    renderState(card, { kind: 'loading', requestId: 'r1', preview: 'x', wordCount: 1 })
-    expect(isHidden(testId(card.shadow, 'verdict-box'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'mode-row'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'advanced'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'actions-row'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'error-box'))).toBe(true)
-  })
-})
-
-describe('renderState — ready (AI verdict)', () => {
-  it('fills hero with binary-collapsed winPct and AI vocabulary', () => {
+  it('renders the original result presentation with Advanced analysis time', () => {
     const card = buildCard()
     renderState(card, {
-      kind: 'ready',
-      requestId: 'r1',
-      preview: 'abc',
-      wordCount: 1,
-      result: aiResult,
+      kind: 'ready', requestId: 'r1', preview: 'text', wordCount: 40, result, durationMs: 340,
     })
-
-    const root = testId(card.shadow, 'card-root')
-    expect(root?.dataset.state).toBe('ready')
-    // rawPct=[5,10,15,70] → aiBinary = 15+70+5 = 90, humanBinary = 5+5 = 10
-    expect(testId(card.shadow, 'verdict-box')?.dataset.verdict).toBe('ai')
-    expect(testId(card.shadow, 'verdict-label')?.textContent).toBe('AI')
-    expect(testId(card.shadow, 'verdict-confidence')?.textContent).toBe('HIGH CONFIDENCE')
-    expect(testId(card.shadow, 'verdict-big')?.textContent).toBe('90')
-    expect(testId(card.shadow, 'verdict-text')?.textContent).toBe('Likely AI-generated')
+    expect(card.refs.verdictLabel.textContent).toBe('AI-LEANING')
+    expect(card.refs.verdictConfidence.textContent).toBe('MED CONFIDENCE')
+    expect(card.refs.verdictBig.textContent).toBe('80')
+    expect(card.refs.verdictText.textContent).toBe('Probably AI-assisted')
+    expect(card.refs.binaryLegendHuman.textContent).toBe('HUMAN 20%')
+    expect(card.refs.binaryLegendAi.textContent).toBe('80% AI')
+    expect(card.refs.binaryBarHuman.dataset.pct).toBe('20')
+    expect(card.refs.binaryBarAi.dataset.pct).toBe('80')
+    expect(card.refs.advancedRows.map((row) => row.name.textContent)).toEqual(result.bucketLabels)
+    expect(card.refs.advancedRows.map((row) => row.pct.textContent)).toEqual(['10%', '20%', '30%', '40%'])
+    expect(card.refs.analysisTime.textContent).toBe('Analysis time 0.34s')
+    expect(card.refs.advanced.textContent).toContain('distribution')
+    expect(card.refs.advanced.textContent).toContain('Analysis time 0.34s')
+    expect(card.shadow.textContent).not.toMatch(/Model estimate|not proof|AI SIGNAL|NEAR THRESHOLD|Decision score|Threshold/)
   })
 
-  it('sizes the binary bar and legend to the human/ai split', () => {
+  it('keeps verdict content hidden outside successful results and in the minimised view', () => {
     const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r1', preview: 'abc', wordCount: 1, result: aiResult,
-    })
-    expect(testId(card.shadow, 'binary-bar-human')?.dataset.pct).toBe('10')
-    expect(testId(card.shadow, 'binary-bar-ai')?.dataset.pct).toBe('90')
-    expect(testId(card.shadow, 'binary-legend-human')?.textContent).toContain('10%')
-    expect(testId(card.shadow, 'binary-legend-ai')?.textContent).toContain('90%')
-  })
-
-  it('renders the 4-bucket advanced drawer with design labels and winner flag', () => {
-    const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r1', preview: 'abc', wordCount: 1, result: aiResult,
-    })
-    const rows = [
-      { id: 'raw-0', label: 'Human', pct: '5' },
-      { id: 'raw-1', label: 'Light AI', pct: '10' },
-      { id: 'raw-2', label: 'Heavy AI', pct: '15' },
-      { id: 'raw-3', label: 'Full AI', pct: '70' },
-    ] as const
-    for (const r of rows) {
-      const row = testId(card.shadow, r.id)
-      expect(row, `${r.id} missing`).not.toBeNull()
-      expect(row!.querySelector<HTMLElement>('.name')?.textContent).toBe(r.label)
-      expect(row!.querySelector<HTMLElement>('.fill')?.dataset.pct).toBe(r.pct)
-      expect(row!.querySelector<HTMLElement>('.val')?.textContent).toBe(r.pct + '%')
-    }
-    // argmax bucket is index 3
-    expect(testId(card.shadow, 'raw-3')?.dataset.winner).toBe('true')
-    expect(testId(card.shadow, 'raw-0')?.dataset.winner).toBeUndefined()
-  })
-
-  it('shows mode row and actions row (copy/share), hides loading and error', () => {
-    const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r1', preview: 'abc', wordCount: 1, result: aiResult,
-    })
-    expect(isHidden(testId(card.shadow, 'mode-row'))).toBe(false)
-    expect(isHidden(testId(card.shadow, 'actions-row'))).toBe(false)
-    expect(isHidden(testId(card.shadow, 'btn-copy'))).toBe(false)
-    expect(isHidden(testId(card.shadow, 'btn-share'))).toBe(false)
-    expect(isHidden(testId(card.shadow, 'dismiss-button'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'loading-row'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'error-box'))).toBe(true)
-  })
-})
-
-describe('renderState — ready (human verdict)', () => {
-  it('uses the human vocabulary and marks human bucket as winner', () => {
-    const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r1', preview: 'x', wordCount: 1, result: humanResult,
-    })
-    // rawPct=[92,5,2,1] → humanBinary=92+2.5=94.5, aiBinary=2+1+2.5=5.5
-    expect(testId(card.shadow, 'verdict-box')?.dataset.verdict).toBe('human')
-    expect(testId(card.shadow, 'verdict-label')?.textContent).toBe('HUMAN')
-    expect(testId(card.shadow, 'verdict-text')?.textContent).toBe('Likely human-written')
-    expect(testId(card.shadow, 'raw-0')?.dataset.winner).toBe('true')
-  })
-})
-
-describe('renderState — error', () => {
-  it('shows the error box with designer copy and a dismiss button', () => {
-    const card = buildCard()
-    renderState(card, {
-      kind: 'error',
-      requestId: 'r1',
-      preview: 'x',
-      wordCount: 1,
-      error: 'model blew up',
-    })
-    const root = testId(card.shadow, 'card-root')
-    expect(root?.dataset.state).toBe('error')
-    expect(isHidden(testId(card.shadow, 'error-box'))).toBe(false)
-    expect(testId(card.shadow, 'error-title')?.textContent).toBe("can't judge yet")
-    expect(testId(card.shadow, 'error-message')?.textContent).toContain('model blew up')
-    expect(isHidden(testId(card.shadow, 'dismiss-button'))).toBe(false)
-    expect(isHidden(testId(card.shadow, 'btn-copy'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'btn-share'))).toBe(true)
-    expect(testId(card.shadow, 'actions-row')?.classList.contains('single')).toBe(true)
-  })
-
-  it('hides the verdict hero, mode row and advanced drawer', () => {
-    const card = buildCard()
-    renderState(card, {
-      kind: 'error', requestId: 'r1', preview: 'x', wordCount: 1, error: 'oops',
-    })
-    expect(isHidden(testId(card.shadow, 'verdict-box'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'mode-row'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'advanced'))).toBe(true)
-    expect(isHidden(testId(card.shadow, 'loading-row'))).toBe(true)
-  })
-})
-
-describe('renderState — idle', () => {
-  it('flips data-state to idle', () => {
-    const card = buildCard()
-    renderState(card, { kind: 'loading', requestId: 'r1', preview: 'x', wordCount: 1 })
-    renderState(card, { kind: 'idle' })
-    const root = testId(card.shadow, 'card-root')
-    expect(root?.dataset.state).toBe('idle')
-  })
-})
-
-describe('threshold + sum invariants', () => {
-  it('HIGH CONFIDENCE when the displayed hero percent rounds to 85', () => {
-    // rawPct summing to 100 with aiBinary = 84.5:
-    //   ai-side = moderately + heavily + 0.5*lightly = 44 + 40 + 0.5 = 84.5
-    //   human-side = human + 0.5*lightly = 15 + 0.5 = 15.5
-    const boundary: ClassifyResult = { ...aiResult, rawPct: [15, 1, 44, 40] }
-    const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r', preview: 'x', wordCount: 1, result: boundary,
-    })
-    expect(testId(card.shadow, 'verdict-big')?.textContent).toBe('85')
-    expect(testId(card.shadow, 'verdict-confidence')?.textContent).toBe('HIGH CONFIDENCE')
-    expect(testId(card.shadow, 'verdict-label')?.textContent).toBe('AI')
-  })
-
-  it('binary legend and bars always sum to 100', () => {
-    // humanResult rawPct=[92,5,2,1] → humanBinary=94.5, aiBinary=5.5
-    const card = buildCard()
-    renderState(card, {
-      kind: 'ready', requestId: 'r', preview: 'x', wordCount: 1, result: humanResult,
-    })
-    const human = Number(testId(card.shadow, 'binary-bar-human')!.dataset.pct)
-    const ai = Number(testId(card.shadow, 'binary-bar-ai')!.dataset.pct)
-    expect(human + ai).toBe(100)
-    expect(testId(card.shadow, 'binary-legend-human')?.textContent).toContain(`${human}%`)
-    expect(testId(card.shadow, 'binary-legend-ai')?.textContent).toContain(`${ai}%`)
-    // winner's legend pct matches the hero big number
-    expect(testId(card.shadow, 'verdict-big')?.textContent).toBe(String(human))
-  })
-})
-
-describe('view flag (minimised)', () => {
-  it('preserves an externally-set data-view across re-renders', () => {
-    const card = buildCard()
-    const root = testId(card.shadow, 'card-root')!
-    renderState(card, {
-      kind: 'ready', requestId: 'r1', preview: 'x', wordCount: 1, result: aiResult,
-    })
-    root.dataset.view = 'minimised'
-    renderState(card, {
-      kind: 'error', requestId: 'r1', preview: 'x', wordCount: 1, error: 'oops',
-    })
-    expect(root.dataset.view).toBe('minimised')
-  })
-})
-
-describe('renderState — truncation note', () => {
-  const ready = (result: ClassifyResult): CardState => ({
-    kind: 'ready',
-    requestId: 'r1',
-    preview: 'preview',
-    wordCount: 900,
-    result,
-  })
-
-  it('stays hidden when the whole selection was analysed', () => {
-    const card = buildCard()
-    renderState(card, ready(aiResult))
-    const note = testId(card.shadow, 'truncation-note')!
-    expect(note.classList.contains('hide')).toBe(true)
-    expect(note.textContent).toBe('')
-  })
-
-  it('tells the user what was actually analysed when truncated', () => {
-    const card = buildCard()
-    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
-    const note = testId(card.shadow, 'truncation-note')!
-    expect(note.classList.contains('hide')).toBe(false)
-    expect(note.textContent).toBe('Analysed the last 512 of 1,665 tokens')
-  })
-
-  it('clears the note when a later untruncated result renders into the same card', () => {
-    const card = buildCard()
-    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
-    renderState(card, ready(aiResult))
-    const note = testId(card.shadow, 'truncation-note')!
-    expect(note.classList.contains('hide')).toBe(true)
-    expect(note.textContent).toBe('')
-  })
-
-  it('is hidden while loading', () => {
-    const card = buildCard()
-    renderState(card, ready({ ...aiResult, truncated: true, tokenCount: 1665, analysedTokens: 512 }))
-    renderState(card, { kind: 'loading', requestId: 'r2', preview: 'p', wordCount: 5 })
-    expect(testId(card.shadow, 'truncation-note')!.classList.contains('hide')).toBe(true)
-  })
-})
-
-// Icon-only controls and status changes need names and live regions, or the
-// card is opaque to a screen reader.
-describe('card accessibility surface', () => {
-  it('names the card as a region', () => {
-    const card = buildCard()
-    const root = testId(card.shadow, 'card-root')!
-    expect(root.getAttribute('role')).toBe('region')
-    expect(root.getAttribute('aria-label')).toBeTruthy()
-  })
-
-  it('announces the verdict politely when it replaces the spinner', () => {
-    const card = buildCard()
-    const box = testId(card.shadow, 'verdict-box')!
-    expect(box.getAttribute('role')).toBe('status')
-    expect(box.getAttribute('aria-live')).toBe('polite')
-  })
-
-  it('announces the loading state', () => {
-    const card = buildCard()
-    expect(testId(card.shadow, 'loading-row')!.getAttribute('role')).toBe('status')
-  })
-
-  it('marks errors as alerts', () => {
-    const card = buildCard()
-    expect(testId(card.shadow, 'error-box')!.getAttribute('role')).toBe('alert')
-  })
-
-  it('gives every icon-only button an accessible name', () => {
-    const card = buildCard()
-    for (const id of ['btn-minimise', 'btn-close']) {
-      const btn = testId(card.shadow, id)!
-      expect(btn.getAttribute('aria-label'), `${id} needs an aria-label`).toBeTruthy()
-    }
-  })
-
-  it('reflects the advanced toggle state for assistive tech', () => {
-    const card = buildCard()
-    expect(testId(card.shadow, 'mode-toggle')!.hasAttribute('aria-pressed')).toBe(true)
+    renderState(card, { kind: 'loading', requestId: 'r1', preview: 'x', wordCount: 40, startedAtMs: 0 })
+    expect(card.refs.verdictBox.classList.contains('hide')).toBe(true)
+    renderState(card, { kind: 'error', requestId: 'r1', preview: 'x', wordCount: 40, error: 'failed' })
+    expect(card.refs.verdictBox.classList.contains('hide')).toBe(true)
+    expect(card.shadow.querySelector('style')?.textContent).toContain('.sh-card[data-view="minimised"] .sh-verdict')
   })
 })

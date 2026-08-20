@@ -156,6 +156,7 @@ document, options page and content scripts — which is the whole point.
 
 ```
 context-menu click
+  └── SW: resume any journaled pre-v1 migration
   └── SW: sendToTab(tabId, classify:started)   → content script mounts card in 'loading'
   └── SW: ensureOffscreenDocument()
   └── SW: sendToRuntime(classify:run)          → offscreen runs inference
@@ -167,9 +168,9 @@ context-menu click
 
 - All non-trivial state transitions in the card go through the pure reducer in
   `content/state.ts` — unit-testable with no DOM.
-- The offscreen's classifier comes from `classifier-factory.ts` which composes
-  `ClassifierRepository` implementations (Fake → OnnxClassifierRepository) behind
-  injectable deps. Unit tests cover the factory's installed/not-installed branches.
+- The offscreen classifier is `OnnxClassifierRepository`; the fake repository is
+  test-only. The content script records `performance.now()` on accepted start/result
+  actions, so timing remains presentation metadata and never enters this protocol.
 
 ## Things to not trust
 
@@ -193,11 +194,16 @@ context-menu click
   is to delete that directory and rerun `pnpm chrome`. Model will need reinstalling.
 - Model is persisted in OPFS under `slop-hammer/model/*`. Sentinel JSON at
   `slop-hammer/.ready`. The installer (`install/install-orchestrator.ts`) writes both.
-- **Test classifier zip** is in `references/` (which is gitignored). It must ship the
-  file set declared in `llm/contract.ts` (`tokenizer.json`, `tokenizer_config.json`,
-  one of the contract filenames, `model_q4f16.onnx`, and at least one
-  `model_q4f16.onnx.data_*` shard). If you need a zip and there isn't one in
-  `references/`, ask — don't reach outside the project for it.
+- The only supported artifact is
+  `Slomin/slophammer_350m/slophammer_350m_v0_1.zip`, SHA-256
+  `3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e`.
+  It declares `SlopHammer 350M v0.1`, `trim+zw`, `tau=3.8088`, and
+  `abstain_band=1.5`. Runtime validation rejects every retired/future identity.
+- v1 is WebGPU-only and requires 40 words. Do not claim a CPU fallback or use
+  the retired 75-character gate.
+- A pre-v1 update writes `.slophammer-v1-migration.json` at the OPFS root,
+  outside `slop-hammer/`, before storage/model deletion. The resumable phases are
+  `pending → wiping → downloading → installing → ready`; `error` retains its reason.
 - Extension ID is stable per (profile, `--load-extension` path) combo. Currently
   `elalpednccdbgjklegipphhapojalphi` in the CfT profile.
 

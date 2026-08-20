@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a focused improvement to Slop Hammer
+description: Propose a focused improvement to SlopHammer
 title: "feat: "
 labels:
   - "type:feature"
@@ -13,7 +13,7 @@ body:
     id: summary
     attributes:
       label: Summary
-      description: What should Slop Hammer do?
+      description: What should SlopHammer do?
       placeholder: Describe the improvement in a few sentences.
     validations:
       required: true

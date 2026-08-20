@@ -1,7 +1,8 @@
-import type { ClassifyResult, RawProbs } from '@/llm/classify-result'
+import { argmax4, type ClassifyResult } from '@/llm/classify-result'
 import type { CardElements } from './card-dom'
 import type { CardState } from './state'
 import { formatTruncationNote } from './truncation'
+import { formatAnalysisTime } from './timing'
 import { computeBinary, verdictDescriptor } from './verdict'
 
 function show(el: HTMLElement): void {
@@ -16,14 +17,6 @@ function setPct(el: HTMLElement, pct: number): void {
   const rounded = Math.round(pct)
   el.dataset.pct = String(rounded)
   el.style.width = `${rounded}%`
-}
-
-function argmax(rawPct: RawProbs): 0 | 1 | 2 | 3 {
-  let best: 0 | 1 | 2 | 3 = 0
-  for (let i = 1 as 1 | 2 | 3; i < 4; i++) {
-    if (rawPct[i]! > rawPct[best]!) best = i
-  }
-  return best
 }
 
 export function renderState(card: CardElements, state: CardState): void {
@@ -57,7 +50,7 @@ export function renderState(card: CardElements, state: CardState): void {
     case 'ready': {
       refs.preview.textContent = state.preview
       refs.wordCount.textContent = `${state.wordCount} words`
-      renderReady(card, state.result)
+      renderReady(card, state.result, state.durationMs)
       hide(refs.loadingRow)
       hide(refs.errorBox)
       show(refs.verdictBox)
@@ -91,7 +84,7 @@ export function renderState(card: CardElements, state: CardState): void {
   }
 }
 
-function renderReady(card: CardElements, result: ClassifyResult): void {
+function renderReady(card: CardElements, result: ClassifyResult, durationMs: number): void {
   const { refs } = card
 
   // The model only reads the last max_seq_length tokens, so say so rather than
@@ -106,9 +99,6 @@ function renderReady(card: CardElements, result: ClassifyResult): void {
   }
 
   const binary = computeBinary(result.rawPct)
-  // Round once and reuse, so the chip, label, hero %, bar widths and legend
-  // all agree about which side of the 65 / 85 thresholds we're on and never
-  // add up to 99% or 101% at half-percent boundaries.
   const winPctRounded = Math.round(binary.winPct)
   const loserRounded = 100 - winPctRounded
   const descriptor = verdictDescriptor(winPctRounded, binary.winner)
@@ -126,13 +116,15 @@ function renderReady(card: CardElements, result: ClassifyResult): void {
   refs.binaryLegendHuman.textContent = `HUMAN ${humanRounded}%`
   refs.binaryLegendAi.textContent = `${aiRounded}% AI`
 
-  const winIdx = argmax(result.rawPct)
+  const winIdx = argmax4(result.probs)
   for (let i = 0; i < 4; i++) {
     const row = refs.advancedRows[i as 0 | 1 | 2 | 3]
     const pct = Math.round(result.rawPct[i as 0 | 1 | 2 | 3])
     setPct(row.fill, pct)
+    row.name.textContent = result.bucketLabels[i]!
     row.pct.textContent = `${pct}%`
     if (i === winIdx) row.root.dataset.winner = 'true'
     else delete row.root.dataset.winner
   }
+  refs.analysisTime.textContent = `Analysis time ${formatAnalysisTime(durationMs)}`
 }

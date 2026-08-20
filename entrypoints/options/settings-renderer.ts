@@ -24,13 +24,13 @@ const RESULT_DETAIL_OPTIONS: ResultDetailOption[] = [
   {
     value: 'basic',
     label: 'Basic',
-    description: 'Show only the Human vs AI verdict. Advanced distribution stays collapsed by default.',
+    description: 'Show the Human/AI result, confidence, percentage, and binary bar. Advanced details stay collapsed by default.',
     swatches: ['h', 'a'],
   },
   {
     value: 'advanced',
     label: 'Advanced',
-    description: 'Expand the full 4-bucket breakdown (Human · Light · Heavy · Full AI) on every result.',
+    description: 'Expand raw Human · Lightly AI · Moderately AI · Fully AI buckets and local analysis time.',
     swatches: ['h', 'l', 'hv', 'a'],
   },
 ]
@@ -52,6 +52,12 @@ function buildResultDetailGroup(selected: ResultDetail, onChange: (value: Result
   wrap.className = 'settings-group'
   wrap.dataset.testid = 'group-result-detail'
   wrap.appendChild(legend('Result detail'))
+  const guidance = document.createElement('p')
+  guidance.className = 'settings-guidance'
+  guidance.dataset.testid = 'result-guidance'
+  guidance.textContent =
+    'Results are probabilistic model signals, can be wrong, and should be considered alongside other evidence.'
+  wrap.appendChild(guidance)
 
   for (const option of RESULT_DETAIL_OPTIONS) {
     const row = buildRow({

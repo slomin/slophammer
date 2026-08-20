@@ -5,7 +5,7 @@ import {
   handleMenuClick,
   isSelectionLongEnough,
   MENU_ITEM_ID,
-  MIN_SELECTION_CHARS,
+  MIN_SELECTION_WORDS,
   type ContextMenuDeps,
 } from '@/background/context-menu'
 
@@ -35,21 +35,20 @@ describe('countWords', () => {
 })
 
 describe('isSelectionLongEnough', () => {
-  it('rejects strings shorter than MIN_SELECTION_CHARS', () => {
-    expect(isSelectionLongEnough('short')).toBe(false)
-    expect(isSelectionLongEnough('x'.repeat(MIN_SELECTION_CHARS - 1))).toBe(false)
+  const words = (count: number) => Array.from({ length: count }, (_, i) => `word${i}`).join(' ')
+
+  it('rejects 39 words regardless of character length', () => {
+    expect(isSelectionLongEnough(words(MIN_SELECTION_WORDS - 1))).toBe(false)
+    expect(isSelectionLongEnough('one'.repeat(1_000))).toBe(false)
   })
 
-  it('accepts strings at or above MIN_SELECTION_CHARS', () => {
-    expect(isSelectionLongEnough('x'.repeat(MIN_SELECTION_CHARS))).toBe(true)
-    expect(isSelectionLongEnough('x'.repeat(MIN_SELECTION_CHARS + 10))).toBe(true)
+  it('accepts 40 words with Unicode and repeated whitespace', () => {
+    expect(isSelectionLongEnough(words(MIN_SELECTION_WORDS))).toBe(true)
+    expect(isSelectionLongEnough(words(MIN_SELECTION_WORDS).replaceAll(' ', '\n\t'))).toBe(true)
   })
 
-  it('measures trimmed length', () => {
-    const padded = '   ' + 'x'.repeat(MIN_SELECTION_CHARS) + '   '
-    expect(isSelectionLongEnough(padded)).toBe(true)
-    const coreShort = '   ' + 'x'.repeat(MIN_SELECTION_CHARS - 1) + '   '
-    expect(isSelectionLongEnough(coreShort)).toBe(false)
+  it('ignores surrounding whitespace', () => {
+    expect(isSelectionLongEnough(`   ${words(MIN_SELECTION_WORDS)}   `)).toBe(true)
   })
 })
 
@@ -103,7 +102,7 @@ describe('handleMenuClick', () => {
     return { deps, calls }
   }
 
-  const longText = 'x'.repeat(MIN_SELECTION_CHARS + 5)
+  const longText = Array.from({ length: MIN_SELECTION_WORDS }, (_, i) => `word${i}`).join(' ')
 
   it('ignores clicks on other menu items', async () => {
     const { deps, calls } = makeDeps()
@@ -141,9 +140,10 @@ describe('handleMenuClick', () => {
     expect(order).toEqual(['ensure', 'send'])
   })
 
-  // Injecting the whole bundle only to reject a five-character selection is
-  // wasted work; probing is enough to know whether the toast can be delivered.
-  it('does not inject for a selection it is about to reject', async () => {
+  // Tabs that were already open when the extension was installed or reloaded
+  // have no content script yet. Short selections still need the content script
+  // so the promised "too short" card is visible instead of becoming a no-op.
+  it('injects for a short selection so stale tabs can show the rejection card', async () => {
     const calls: Array<{ inject: boolean }> = []
     const { deps } = makeDeps({
       ensureContentScript: async (_tabId, options) => {
@@ -152,7 +152,7 @@ describe('handleMenuClick', () => {
       },
     })
     await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'short', tabId: 3 })
-    expect(calls).toEqual([{ inject: false }])
+    expect(calls).toEqual([{ inject: true }])
   })
 
   it('injects when there is real work to do', async () => {
@@ -170,9 +170,23 @@ describe('handleMenuClick', () => {
   it('sends selection:too-short without classifying', async () => {
     const { deps, calls } = makeDeps()
     await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'short', tabId: 3 })
-    expect(calls.tabMessages).toEqual([{ type: 'selection:too-short', length: 5 }])
+    expect(calls.tabMessages).toEqual([{ type: 'selection:too-short', wordCount: 1, minWords: 40 }])
     expect(calls.runtimeMessages).toHaveLength(0)
     expect(calls.offscreenEnsured).toBe(0)
+  })
+
+  it('logs a short selection as expected information, not a warning', async () => {
+    const levels: string[] = []
+    const { deps } = makeDeps({
+      logger: {
+        info: () => levels.push('info'),
+        warn: () => levels.push('warn'),
+      },
+    })
+
+    await handleMenuClick(deps, { menuItemId: MENU_ITEM_ID, selectionText: 'short', tabId: 3 })
+
+    expect(levels).toEqual(['info'])
   })
 
   it('starts the card, ensures the offscreen document, then dispatches the run', async () => {

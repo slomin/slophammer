@@ -1,4 +1,5 @@
-import { validateContract, type SlopHammerContract } from '@/llm/contract'
+import { validateSupportedContract, type SlopHammerContract } from '@/llm/contract'
+import { SUPPORTED_ARTIFACT, SUPPORTED_ARTIFACT_URL } from '@/llm/supported-artifact'
 import { assertRequiredFiles, isKnownModelFile } from './file-recognition'
 import { buildSentinel, type HostedSentinelMeta } from './sentinel'
 
@@ -45,6 +46,14 @@ export interface RunInstallArgs {
 export async function runInstall(args: RunInstallArgs): Promise<SlopHammerContract> {
   const { reader, opfs, marks, onProgress } = args
 
+  if (args.hostedMeta && (
+    args.hostedMeta.filename !== SUPPORTED_ARTIFACT.filename ||
+    args.hostedMeta.lfsOid !== SUPPORTED_ARTIFACT.sha256 ||
+    args.hostedMeta.url !== SUPPORTED_ARTIFACT_URL
+  )) {
+    throw new Error('Hosted model identity does not match the supported SlopHammer 350M artifact.')
+  }
+
   await opfs.resetModelDir()
 
   const seen = new Set<string>()
@@ -74,14 +83,16 @@ export async function runInstall(args: RunInstallArgs): Promise<SlopHammerContra
 
   const contractText = await opfs.readTextFile(contractFile)
   const contract: unknown = JSON.parse(contractText)
-  validateContract(contract)
+  validateSupportedContract(contract)
 
   const checkpointId = contract.version ?? contract.base_model ?? contractFile
   const sentinel = buildSentinel({ checkpointId, contractFile, hosted: args.hostedMeta })
-  await opfs.writeSentinel(JSON.stringify(sentinel))
-
   await marks.setInstalled(checkpointId)
   await marks.persistStorage()
+  // The OPFS sentinel is the activation boundary. Write it only after every
+  // model file, exact contract check, storage marker and persistence request
+  // has succeeded, so an interruption can never advertise a partial model.
+  await opfs.writeSentinel(JSON.stringify(sentinel))
 
   return contract
 }

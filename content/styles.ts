@@ -149,6 +149,7 @@ export const CARD_STYLES = `
   }
   .sh-verdict[data-verdict="human"] { --sh-verdict-wash: var(--sh-human); }
   .sh-verdict[data-verdict="ai"] { --sh-verdict-wash: var(--sh-ai); }
+  .sh-verdict[data-verdict="near"] { --sh-verdict-wash: var(--sh-light); }
 
   .sh-verdict .v-head {
     display: flex; align-items: center; justify-content: space-between;
@@ -183,7 +184,6 @@ export const CARD_STYLES = `
     letter-spacing: -0.005em;
     color: var(--sh-verdict-wash);
   }
-
   .sh-binary-bar {
     position: relative; height: 6px; margin-top: 12px;
     border-radius: 3px; overflow: hidden;
@@ -275,6 +275,16 @@ export const CARD_STYLES = `
   }
   .sh-advanced .row[data-winner="true"] .name,
   .sh-advanced .row[data-winner="true"] .val { color: var(--sh-ink); font-weight: 700; }
+  .sh-advanced .adv-meta {
+    display: grid;
+    gap: 3px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--sh-line);
+    color: var(--sh-muted);
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
 
   /* ---- error box ---- */
   .error-box {

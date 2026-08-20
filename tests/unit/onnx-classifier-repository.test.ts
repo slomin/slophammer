@@ -10,6 +10,9 @@ import type { SlopHammerContract } from '@/llm/contract'
 const contract: SlopHammerContract = {
   n_buckets: 4,
   max_seq_length: 8,
+  preprocessing: 'trim+zw',
+  calibration: { tau: 3.8088, abstain_band: 1.5 },
+  labels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
   lo_threshold: 0.1,
   hi_threshold: 0.9,
   pad_token_id: 0,
@@ -54,12 +57,12 @@ describe('OnnxClassifierRepository.classify', () => {
     const sum = result.probs.reduce((a, b) => a + b, 0)
     expect(sum).toBeCloseTo(1)
     expect(result.probs[0]).toBeGreaterThan(result.probs[3]!)
-    expect(result.verdict).toBe('human')
+    expect(result.verdict).toBe('not-flagged')
     expect(result.tokenCount).toBe(3)
     expect(result.truncated).toBe(false)
   })
 
-  it('maps largest logit on class 3 to verdict="ai"', async () => {
+  it('uses the calibrated score instead of argmax', async () => {
     const repo = new OnnxClassifierRepository({
       tokenizer: makeTokenizer([1, 2]),
       session: makeSession(new Float32Array([-1, -1, -1, 0.5])),
@@ -68,7 +71,7 @@ describe('OnnxClassifierRepository.classify', () => {
       runtime,
     })
     const result = await repo.classify('some long ai text')
-    expect(result.verdict).toBe('ai')
+    expect(result.verdict).toBe('not-flagged')
   })
 
   it('marks truncated when tokens exceed max_seq_length', async () => {
@@ -101,7 +104,7 @@ describe('OnnxClassifierRepository.classify', () => {
     const result = await repo.classify('x')
     expect(outputTensor.getData).toHaveBeenCalledOnce()
     expect(outputTensor.dispose).toHaveBeenCalledOnce()
-    expect(result.verdict).toBe('human')
+    expect(result.verdict).toBe('not-flagged')
   })
 
   it('throws a descriptive error when the named output is missing', async () => {
@@ -129,7 +132,7 @@ describe('OnnxClassifierRepository.classify', () => {
       runtime: { ...runtime, outputName: 'my_out' },
     })
     const r = await repo.classify('x')
-    expect(r.verdict).toBe('ai')
+    expect(r.verdict).toBe('not-flagged')
   })
 
   it('passes correctly padded inputs to session.run', async () => {
@@ -154,6 +157,19 @@ describe('OnnxClassifierRepository.classify', () => {
     expect(ids).toEqual([0, 0, 0, 0, 0, 11, 12, 13])
     const mask = Array.from(feeds.attention_mask!.data, (b) => Number(b))
     expect(mask).toEqual([0, 0, 0, 0, 0, 1, 1, 1])
+  })
+
+  it('strips all audited zero-width characters and trims before tokenization', async () => {
+    const tokenizer = makeTokenizer([1])
+    const repo = new OnnxClassifierRepository({
+      tokenizer,
+      session: makeSession(new Float32Array([0, 0, 0, 0])),
+      contract,
+      createTensor,
+      runtime,
+    })
+    await repo.classify('  a\u200Bb\u200Cc\u200Dd\u2060e\uFEFF  ')
+    expect(tokenizer).toHaveBeenCalledWith('abcde', { add_special_tokens: true })
   })
 })
 

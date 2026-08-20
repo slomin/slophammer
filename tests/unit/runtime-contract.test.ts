@@ -7,10 +7,13 @@ const base: SlopHammerContract = {
   lo_threshold: 0.03,
   hi_threshold: 0.15,
   max_seq_length: 512,
+  preprocessing: 'trim+zw',
+  calibration: { tau: 3.8088, abstain_band: 1.5 },
+  labels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
 }
 
-// The shipping contract (Slomin/slop_hammer_0_8_b) sets none of these three,
-// and its tokenizer.json declares padding {direction: 'Left', pad_id: 248044}.
+// Runtime resolution remains independently tested with incomplete generic
+// contracts; exact 350M identity is enforced before this runs in production.
 const shippingTokenizerPadding = { direction: 'Left', pad_id: 248044 }
 
 describe('resolveRuntimeContract — the shipping model', () => {

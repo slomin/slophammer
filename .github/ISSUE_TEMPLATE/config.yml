@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Slop Hammer support
+  - name: SlopHammer support
     url: https://github.com/slomin/slophammer/blob/main/docs/support.md
     about: Read setup help and troubleshooting guidance before opening an issue.
-  - name: Slop Hammer privacy policy
+  - name: SlopHammer privacy policy
     url: https://github.com/slomin/slophammer/blob/main/docs/privacy.md
-    about: Learn what Slop Hammer reads, stores, and processes locally.
+    about: Learn what SlopHammer reads, stores, and processes locally.

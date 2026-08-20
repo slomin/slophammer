@@ -400,15 +400,20 @@ export default defineContentScript({
         return false
       }
       if (isSelectionTooShort(m)) {
-        showToast(`Selection too short — need at least 75 characters, got ${m.length}.`)
-        return false
-      }
-      if (isClassifyStarted(m)) {
         lastRect = captureSelectionRect()
         applyAction(m)
         return false
       }
-      if (isClassifyResult(m) || isClassifyError(m) || isModelStatus(m)) {
+      if (isClassifyStarted(m)) {
+        lastRect = captureSelectionRect()
+        applyAction({ ...m, startedAtMs: performance.now() })
+        return false
+      }
+      if (isClassifyResult(m)) {
+        applyAction({ ...m, finishedAtMs: performance.now() })
+        return false
+      }
+      if (isClassifyError(m) || isModelStatus(m)) {
         applyAction(m)
         return false
       }

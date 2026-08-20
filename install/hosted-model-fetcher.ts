@@ -28,6 +28,9 @@ export class DownloadChecksumMismatchError extends Error {
 export async function fetchZipWithProgress(
   args: FetchZipWithProgressArgs,
 ): Promise<FetchZipWithProgressResult> {
+  if (!/^[a-f0-9]{64}$/.test(args.expectedSha256)) {
+    throw new Error('A pinned 64-character SHA-256 checksum is required before download.')
+  }
   const fetcher = args.fetcher ?? fetch
   const response = await fetcher(args.url)
   if (!response.ok) {

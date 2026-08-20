@@ -11,8 +11,10 @@ import type { ExtensionMessage } from '@/messaging/protocol'
 const sampleResult: ClassifyResult = {
   probs: [0.1, 0.2, 0.3, 0.4],
   rawPct: [10, 20, 30, 40],
-  aiScore: 0.9,
-  verdict: 'ai',
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 4.2,
+  threshold: 3.8088,
+  verdict: 'flagged',
   tokenCount: 10,
   analysedTokens: 10,
   truncated: false,
@@ -44,7 +46,7 @@ describe('createMessageDispatcher', () => {
 
   it('narrows message types inside handlers (compile-time)', async () => {
     const onResult = vi.fn(async (m: { requestId: string; tabId: number; result: ClassifyResult }) => {
-      expect(m.result.verdict).toBe('ai')
+      expect(m.result.verdict).toBe('flagged')
     })
     const handlers: HandlerMap = { 'classify:result': onResult }
     const dispatch = createMessageDispatcher(handlers)

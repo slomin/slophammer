@@ -17,17 +17,30 @@ import {
 import { ChromeStorageMarker, OpfsWriter, wipeModel } from '@/install/opfs-writer'
 import { NOT_A_ZIP_MESSAGE, isZipFilename } from '@/install/replace-request'
 import { parseSentinel, type HostedSentinelMeta, type SentinelPayload } from '@/install/sentinel'
+import { resolveInstalledHostedState } from '@/install/update-current'
 import { MODEL_ROOT_DIR, SENTINEL_NAME } from '@/llm/opfs-model-reader'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
 import { resolveTheme } from '@/settings/resolve-theme'
 import { createChromeSettingsStore } from '@/settings/settings-store'
 import type { Settings } from '@/settings/settings-types'
+import {
+  V1_MIGRATION_STATE_KEY,
+  didMigrationBecomeReady,
+  isMigrationBlocking,
+  reconcileMigrationUiState,
+  type MigrationState,
+} from '@/migration/state'
+import {
+  browserInstalledArtifactReader,
+  hasSupportedInstalledArtifact,
+} from '@/migration/installed-artifact'
 import { renderSettings } from './settings-renderer'
 
 installErrorForwarding('options')
 const log = createLogger('options')
 
 const root = document.getElementById('install')!
+const migrationRoot = document.getElementById('migration')!
 const settingsRoot = document.getElementById('settings')!
 const versionEl = document.querySelector<HTMLElement>('[data-testid="page-version"]')
 if (versionEl) {
@@ -39,6 +52,53 @@ const systemDarkMql = window.matchMedia('(prefers-color-scheme: dark)')
 let currentSettings: Settings | null = null
 let state: InstallState = initialInstallState
 let currentSentinel: SentinelPayload | null = null
+let currentMigrationState: MigrationState | null = null
+
+function installIsBlocked(): boolean {
+  return isMigrationBlocking(currentMigrationState)
+}
+
+function rerenderInstall(): void {
+  renderInstall(root, state, handlers, { blocked: installIsBlocked() })
+}
+
+function renderMigration(state: MigrationState | null): void {
+  const previous = currentMigrationState
+  currentMigrationState = reconcileMigrationUiState(currentMigrationState, state)
+  const refreshInstalled = didMigrationBecomeReady(previous, currentMigrationState)
+  migrationRoot.innerHTML = ''
+  rerenderInstall()
+  if (!currentMigrationState || currentMigrationState.phase === 'ready') {
+    if (refreshInstalled) {
+      refreshInstalledState().catch((err) => {
+        log.error('failed to refresh installed model after migration', String(err))
+      })
+    }
+    return
+  }
+  state = currentMigrationState
+  const card = document.createElement('div')
+  card.className = `migration-card${state.phase === 'error' ? ' error' : ''}`
+  card.dataset.testid = 'migration-card'
+  const title = document.createElement('strong')
+  title.textContent = state.phase === 'error' ? 'Model update needs attention' : 'Updating SlopHammer model'
+  const message = document.createElement('div')
+  message.dataset.testid = 'migration-message'
+  message.textContent = state.phase === 'error'
+    ? state.error ?? 'The update failed. Retry to continue; the retired model stays unavailable.'
+    : `${state.phase[0]!.toUpperCase()}${state.phase.slice(1)}${state.progress == null ? '…' : ` — ${state.progress}%`}`
+  card.appendChild(title)
+  card.appendChild(message)
+  if (state.phase === 'error') {
+    const retry = document.createElement('button')
+    retry.className = 'btn danger'
+    retry.type = 'button'
+    retry.textContent = 'Retry model update'
+    retry.addEventListener('click', () => browser.runtime.sendMessage({ type: 'migration:request-resume' }).catch(() => {}))
+    card.appendChild(retry)
+  }
+  migrationRoot.appendChild(card)
+}
 
 function applyTheme(settings: Settings) {
   const resolved = resolveTheme(settings.theme, systemDarkMql.matches)
@@ -60,7 +120,7 @@ function dispatch(action: InstallAction) {
   const next = reduceInstallState(state, action)
   if (next === state) return
   state = next
-  renderInstall(root, state, handlers)
+  rerenderInstall()
 }
 
 const handlers = {
@@ -75,6 +135,7 @@ const handlers = {
     })
   },
   onWipe: async () => {
+    if (installIsBlocked()) return
     await wipeModel()
     currentSentinel = null
     log.info('model wiped')
@@ -106,6 +167,18 @@ async function readSentinelFile(): Promise<SentinelPayload | null> {
   }
 }
 
+async function refreshInstalledState(): Promise<void> {
+  const sentinel = await readSentinelFile()
+  currentSentinel = sentinel
+  dispatch(sentinel
+    ? {
+        type: 'detected-installed',
+        checkpointId: sentinel.checkpointId,
+        installedAt: sentinel.installedAt,
+      }
+    : { type: 'detected-empty' })
+}
+
 async function runPostInstall(sentinel: SentinelPayload) {
   currentSentinel = sentinel
   dispatch({
@@ -118,6 +191,7 @@ async function runPostInstall(sentinel: SentinelPayload) {
 }
 
 async function installFromFile(file: File) {
+  if (installIsBlocked()) return
   if (!isZipFilename(file.name)) {
     dispatch({ type: 'install-failed', message: NOT_A_ZIP_MESSAGE })
     return
@@ -154,6 +228,7 @@ async function installFromFile(file: File) {
 }
 
 async function installFromHosted(explicit?: PendingUpdate) {
+  if (installIsBlocked()) return
   // Everything up to runInstall is non-destructive: the installed model is
   // still on disk and still loaded. Only report a failure as a lost install
   // once resetModelDir() has actually run.
@@ -239,7 +314,7 @@ async function resolveHostedTarget(): Promise<PendingUpdate | null> {
   }
   return {
     filename: HOSTED_MODEL.currentFilename,
-    lfsOid: '',
+    lfsOid: HOSTED_MODEL.expectedSha256,
     url: resolveHostedZipUrl(HOSTED_MODEL.currentFilename),
   }
 }
@@ -252,10 +327,8 @@ function friendlyHostedError(message: string): string {
 }
 
 async function runUpdateCheck() {
+  if (installIsBlocked()) return
   if (state.kind !== 'installed') return
-  const current = currentSentinel?.hosted
-    ? { filename: currentSentinel.hosted.filename, lfsOid: currentSentinel.hosted.lfsOid }
-    : null
   // A replace can finish while this is in flight. The result was computed
   // against the model that was installed at the time, so attaching it to a
   // different one would offer an "update" derived from a model the user has
@@ -264,6 +337,11 @@ async function runUpdateCheck() {
   const stale = () => currentSentinel !== checkedAgainst
   dispatch({ type: 'update-check-started' })
   try {
+    const current = await resolveInstalledHostedState({
+      sentinel: checkedAgainst,
+      hasSupportedInstall: () => hasSupportedInstalledArtifact(browserInstalledArtifactReader()),
+    })
+    if (stale()) return
     const { hasUpdate, latest } = await checkHostedForUpdate({ current })
     if (stale()) {
       log.info('update check discarded — the installed model changed while it was in flight')
@@ -286,6 +364,14 @@ async function runUpdateCheck() {
 }
 
 async function bootstrap() {
+  const migrationData = await chrome.storage.local.get(V1_MIGRATION_STATE_KEY)
+  renderMigration((migrationData[V1_MIGRATION_STATE_KEY] as MigrationState | undefined) ?? null)
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes[V1_MIGRATION_STATE_KEY]) return
+    renderMigration((changes[V1_MIGRATION_STATE_KEY]!.newValue as MigrationState | undefined) ?? null)
+  })
+  browser.runtime.sendMessage({ type: 'migration:request-resume' }).catch(() => {})
+
   currentSettings = await settingsStore.get()
   applyTheme(currentSettings)
   rerenderSettings(currentSettings)
@@ -299,19 +385,9 @@ async function bootstrap() {
     if (currentSettings) applyTheme(currentSettings)
   })
 
-  const sentinel = await readSentinelFile()
-  if (sentinel) {
-    currentSentinel = sentinel
-    dispatch({
-      type: 'detected-installed',
-      checkpointId: sentinel.checkpointId,
-      installedAt: sentinel.installedAt,
-    })
-  } else {
-    dispatch({ type: 'detected-empty' })
-  }
+  await refreshInstalledState()
   log.info('options page opened', { initial: state.kind, settings: currentSettings })
 }
 
-renderInstall(root, state, handlers)
+rerenderInstall()
 bootstrap()

@@ -25,8 +25,10 @@ import type { ClassifyResult } from '@/llm/classify-result'
 const sampleResult: ClassifyResult = {
   probs: [0.1, 0.2, 0.3, 0.4],
   rawPct: [10, 20, 30, 40],
-  aiScore: 0.9,
-  verdict: 'ai',
+  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
+  extLlr: 4.2,
+  threshold: 3.8088,
+  verdict: 'flagged',
   tokenCount: 10,
   analysedTokens: 10,
   truncated: false,
@@ -43,10 +45,15 @@ const messages: Record<string, ExtensionMessage> = {
   },
   classifyResult: { type: 'classify:result', requestId: 'r1', tabId: 1, result: sampleResult },
   classifyError: { type: 'classify:error', requestId: 'r1', tabId: 1, error: 'nope' },
-  selectionTooShort: { type: 'selection:too-short', length: 3 },
+  selectionTooShort: { type: 'selection:too-short', wordCount: 3, minWords: 40 },
   modelLoad: { type: 'model:load' },
   modelStatus: { type: 'model:status', status: 'ready' },
   modelInstalled: { type: 'model:installed' },
+  migrationStorageWrite: {
+    type: 'migration:storage-write-request',
+    operation: 'model-marker',
+    checkpointId: 'SlopHammer 350M v0.1',
+  },
   log: {
     type: 'LOG',
     source: 'background',
@@ -91,6 +98,13 @@ describe('type guards', () => {
       throw new Error('guard failed')
     }
   })
+
+  it('rejects a legacy result that lacks the calibrated protocol fields', () => {
+    expect(isClassifyResult({
+      type: 'classify:result', requestId: 'r1', tabId: 1,
+      result: { probs: [0.1, 0.2, 0.3, 0.4], rawPct: [10, 20, 30, 40], aiScore: 0.9, verdict: 'ai' },
+    })).toBe(false)
+  })
 })
 
 describe('ExtensionMessage union', () => {
@@ -104,8 +118,10 @@ describe('ExtensionMessage union', () => {
       messages.modelLoad as ModelLoadMessage,
       messages.modelStatus as ModelStatusMessage,
       messages.modelInstalled as ModelInstalledMessage,
+      messages.migrationStorageWrite!,
+      messages.migrationStorageWriteComplete!,
       messages.log as LogMessage,
     ]
-    expect(_).toHaveLength(9)
+    expect(_).toHaveLength(11)
   })
 })

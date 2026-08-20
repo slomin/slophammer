@@ -3,19 +3,26 @@ import type { ClassifierRepository } from '@/llm'
 import { createClassifyQueue } from '@/llm/classify-queue'
 import { setupOnnxClassifier } from '@/llm/onnx-setup'
 import { isModelInstalled } from '@/llm/opfs-model-reader'
+import { MIN_SELECTION_WORDS, countWords } from '@/llm/input-policy'
+import { withHeartbeat } from '@/llm/inference-heartbeat'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
 import {
   isClassifyRun,
   isModelLoad,
+  type MigrationStorageOperation,
   type ClassifyRunMessage,
   type ExtensionMessage,
 } from '@/messaging/protocol'
+import { createBrowserMigrationDeps, createMigrationRunner } from '@/migration/offscreen-runner'
+import { waitForMigrationReady } from '@/migration/gate'
+import { readMigrationJournal } from '@/migration/opfs-journal'
+import { requestMigrationStorage } from '@/migration/storage-rpc'
 
 installErrorForwarding('offscreen')
 const log = createLogger('offscreen')
 
-function broadcast(message: ExtensionMessage): void {
-  browser.runtime.sendMessage(message).catch(() => {
+function broadcast(message: ExtensionMessage): Promise<void> {
+  return browser.runtime.sendMessage(message).then(() => {}, () => {
     // Fire-and-forget — no listener is an expected cold-start state.
   })
 }
@@ -41,14 +48,23 @@ function trackFactory(): Promise<ClassifierRepository> {
   return p
 }
 
-let repoPromise: Promise<ClassifierRepository> = trackFactory()
+// Stay cold until a classification has passed the migration gate or an
+// explicit model:load arrives. Eager startup can race a pre-v1 migration and
+// begin loading the retired model in the brief window before its journal is
+// created and the shutdown phase runs.
+let repoPromise: Promise<ClassifierRepository> | null = null
+
+function classifierPromise(): Promise<ClassifierRepository> {
+  if (!repoPromise) repoPromise = trackFactory()
+  return repoPromise
+}
 
 // Every classification goes through this queue so overlapping requests can
 // never reach the ONNX Runtime session at the same time. Resolving repoPromise
 // inside the task means a re-initialised classifier (model:load) is picked up
 // by the next queued request.
 const classifyQueue = createClassifyQueue((text: string) =>
-  repoPromise.then((repo) => repo.classify(text)),
+  classifierPromise().then((repo) => repo.classify(text)),
 )
 
 log.info('offscreen booted')
@@ -65,7 +81,7 @@ async function reinitialiseClassifier(): Promise<void> {
   repoPromise = classifyQueue
     .drain()
     .then(async () => {
-      const old = await previous.catch(() => null)
+      const old = await previous?.catch(() => null)
       if (old?.dispose) {
         try {
           await old.dispose()
@@ -80,6 +96,44 @@ async function reinitialiseClassifier(): Promise<void> {
   repoPromise.catch((err) => log.warn('classifier unavailable', String(err)))
 }
 
+async function shutdownClassifier(): Promise<void> {
+  const previous = repoPromise
+  await classifyQueue.drain()
+  const old = await previous?.catch(() => null)
+  if (old?.dispose) await old.dispose()
+  const blocked = Promise.reject<ClassifierRepository>(new Error('SlopHammer update in progress.'))
+  blocked.catch(() => {})
+  repoPromise = blocked
+}
+
+function requestStorageClear(): Promise<void> {
+  return requestMigrationStorage({ type: 'migration:storage-clear-request' }, 'cleared')
+}
+
+function requestStorageWrite(
+  operation: MigrationStorageOperation,
+  checkpointId?: string,
+): Promise<void> {
+  return requestMigrationStorage(
+    { type: 'migration:storage-write-request', operation, checkpointId },
+    operation,
+  )
+}
+
+const migrationRunner = createMigrationRunner(
+  createBrowserMigrationDeps({
+    shutdownClassifier,
+    requestStorageClear,
+    requestStorageWrite,
+    publish: (state) => broadcast({ type: 'migration:status', state }),
+    reloadClassifier: reinitialiseClassifier,
+  }),
+)
+
+async function ensureMigrationReady(): Promise<void> {
+  await waitForMigrationReady(migrationRunner, readMigrationJournal)
+}
+
 // The card's watchdog treats a model:status of 'loading' as proof the
 // classifier is alive. Progress is only emitted while bytes are being read out
 // of OPFS; building the ONNX session afterwards is a long silent step that on a
@@ -87,18 +141,6 @@ async function reinitialiseClassifier(): Promise<void> {
 // that then succeeds. A heartbeat covers the whole in-flight period, so a
 // genuinely wedged classifier still times out but a slow one does not.
 const HEARTBEAT_MS = 10_000
-
-async function withHeartbeat<T>(work: () => Promise<T>): Promise<T> {
-  const timer = setInterval(
-    () => broadcast({ type: 'model:status', status: 'loading' }),
-    HEARTBEAT_MS,
-  )
-  try {
-    return await work()
-  } finally {
-    clearInterval(timer)
-  }
-}
 
 async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
   const { requestId, tabId, text } = message
@@ -109,7 +151,20 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
     queued: classifyQueue.pending(),
   })
   try {
-    const result = await withHeartbeat(() => classifyQueue.run(text))
+    const wordCount = countWords(text)
+    if (wordCount < MIN_SELECTION_WORDS) {
+      throw new Error(
+        `Too short to judge — select at least ${MIN_SELECTION_WORDS} words (${wordCount} selected)`,
+      )
+    }
+    const result = await withHeartbeat(
+      async () => {
+        await ensureMigrationReady()
+        return classifyQueue.run(text)
+      },
+      () => { void broadcast({ type: 'model:status', status: 'loading' }) },
+      HEARTBEAT_MS,
+    )
     log.info('classify:result dispatching', {
       requestId,
       verdict: result.verdict,
@@ -119,7 +174,8 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
         moderately: result.rawPct[2].toFixed(2),
         heavily: result.rawPct[3].toFixed(2),
       },
-      aiScore: result.aiScore.toFixed(3),
+      extLlr: result.extLlr.toFixed(4),
+      threshold: result.threshold.toFixed(4),
     })
     broadcast({ type: 'classify:result', requestId, tabId, result })
   } catch (err) {
@@ -130,6 +186,14 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
 }
 
 browser.runtime.onMessage.addListener((raw) => {
+  if (raw && typeof raw === 'object' && (raw as { type?: string }).type === 'migration:start') {
+    void migrationRunner.run().catch((err) => log.error('migration failed', String(err)))
+    return false
+  }
+  if (raw && typeof raw === 'object' && (raw as { type?: string }).type === 'migration:resume') {
+    void ensureMigrationReady().catch((err) => log.error('migration resume failed', String(err)))
+    return false
+  }
   if (isModelLoad(raw)) {
     void reinitialiseClassifier()
     return false
@@ -139,4 +203,10 @@ browser.runtime.onMessage.addListener((raw) => {
     return false
   }
   return false
+})
+
+void readMigrationJournal().then((journal) => {
+  if (journal && journal.phase !== 'ready') {
+    void migrationRunner.run().catch((err) => log.error('migration resume failed', String(err)))
+  }
 })

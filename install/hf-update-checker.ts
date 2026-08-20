@@ -45,19 +45,21 @@ export async function checkHostedForUpdate(args: CheckHostedForUpdateArgs): Prom
   }
 
   const entries = parseTreeEntries(await response.json())
-  const withLfs = new Map<string, TreeEntry>()
-  for (const e of entries) {
-    if (e.lfs?.oid) withLfs.set(e.path, e)
+  const latestFilename = pickLatestHostedZip(entries.map((entry) => entry.path))
+  if (!latestFilename) {
+    throw new Error(`Pinned model ${HOSTED_MODEL.currentFilename} is missing from Hugging Face.`)
   }
-
-  const latestFilename = pickLatestHostedZip([...withLfs.keys()])
-  if (!latestFilename) return { hasUpdate: false, latest: null }
-
-  const latestEntry = withLfs.get(latestFilename)!
+  const latestEntry = entries.find((entry) => entry.path === latestFilename)!
+  if (latestEntry.lfs?.oid !== HOSTED_MODEL.expectedSha256) {
+    throw new Error('Pinned model checksum does not match the supported artifact.')
+  }
+  if (latestEntry.lfs.size !== HOSTED_MODEL.expectedSize) {
+    throw new Error('Pinned model size does not match the supported artifact.')
+  }
   const latest: HostedLatest = {
     filename: latestFilename,
-    lfsOid: latestEntry.lfs!.oid,
-    size: latestEntry.lfs!.size,
+    lfsOid: HOSTED_MODEL.expectedSha256,
+    size: HOSTED_MODEL.expectedSize,
     url: resolveHostedZipUrl(latestFilename),
   }
 
