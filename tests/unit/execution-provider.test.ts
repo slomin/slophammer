@@ -154,3 +154,68 @@ describe('execution-provider selection', () => {
     }
   })
 })
+
+
+// The actionable message must come from whichever attempt actually explains the
+// failure. Deriving it from the WASM error alone tells a user who ran out of
+// memory on WebGPU to restart Chrome instead of freeing memory.
+describe('RuntimeInitializationError — choosing the actionable cause', () => {
+  it('uses the WebGPU cause when only it is specific', async () => {
+    const error = await selectExecutionProvider({
+      probeWebGpu: async () => ({ available: true, adapter: {} }),
+      createWebGpu: async () => {
+        throw new Error('Out of memory allocating buffer of 900000000 bytes')
+      },
+      createWasm: async () => {
+        throw new Error('backend initialization exploded')
+      },
+    }).then(
+      () => null,
+      (e: unknown) => e as RuntimeInitializationError,
+    )
+
+    expect(error).toBeInstanceOf(RuntimeInitializationError)
+    if (!(error instanceof RuntimeInitializationError)) throw new Error('expected a runtime error')
+    expect(error.code).toBe('allocation-failure')
+    expect(error.message).toMatch(/memory/i)
+    expect(error.diagnosticMessage()).toMatch(/900000000/)
+    expect(error.diagnosticMessage()).toMatch(/exploded/)
+  })
+
+  it('still prefers the WASM cause when it is the specific one', async () => {
+    const error = await selectExecutionProvider({
+      probeWebGpu: async () => ({ available: false, reason: 'no adapter' }),
+      createWasm: async () => {
+        throw new Error('invalid protobuf: model is corrupt')
+      },
+      createWebGpu: async () => {
+        throw new Error('unused')
+      },
+    }).then(
+      () => null,
+      (e: unknown) => e as RuntimeInitializationError,
+    )
+
+    if (!(error instanceof RuntimeInitializationError)) throw new Error('expected a runtime error')
+    expect(error.code).toBe('corrupt-model')
+    expect(error.message).toMatch(/reinstall/i)
+  })
+
+  it('falls back to the generic message when neither cause is specific', async () => {
+    const error = await selectExecutionProvider({
+      probeWebGpu: async () => ({ available: false, reason: 'no adapter' }),
+      createWasm: async () => {
+        throw new Error('something odd')
+      },
+      createWebGpu: async () => {
+        throw new Error('unused')
+      },
+    }).then(
+      () => null,
+      (e: unknown) => e as RuntimeInitializationError,
+    )
+
+    if (!(error instanceof RuntimeInitializationError)) throw new Error('expected a runtime error')
+    expect(error.code).toBe('provider-initialization')
+  })
+})

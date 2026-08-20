@@ -10,6 +10,14 @@ import { setupOnnxClassifier } from './onnx-setup'
 
 const scope = self as DedicatedWorkerGlobalScope
 let repositoryPromise: Promise<ClassifierRepository> | null = null
+// Deliberately a second serializer, on top of the offscreen document's queue.
+// It is redundant today — that queue submits one classify at a time, so this
+// chain never holds more than one entry — but it guards the thing that actually
+// breaks: two concurrent `session.run()` calls permanently wedged inference and
+// took the whole offscreen document down with them. This lives at the session
+// boundary, so a future caller that reaches the worker by another route cannot
+// reintroduce that failure. Backpressure and visibility stay with the offscreen
+// queue, which is where `queueDepth` and `maxPending` are reported from.
 let tail: Promise<unknown> = Promise.resolve()
 
 function post(message: ClassifierWorkerResponse): void {
@@ -29,8 +37,14 @@ function initialise(runtimeBaseUrl: string): Promise<ClassifierRepository> {
   })
   repositoryPromise.then(
     (repository) => {
+      // Throwing here would reject a derived promise nobody handles, which does
+      // not fire the Worker `error` event either — the client would post neither
+      // init:ready nor init:error and simply sit on its 10-minute init timeout.
       if (!repository.runtimeDiagnostics) {
-        throw new Error('Classifier initialized without runtime diagnostics.')
+        const error = 'Classifier initialized without runtime diagnostics.'
+        console.error('[SlopHammer:classifier-worker]', error)
+        post({ type: 'init:error', error, diagnostic: error })
+        return
       }
       post({ type: 'init:ready', diagnostics: repository.runtimeDiagnostics })
     },

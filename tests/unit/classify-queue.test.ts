@@ -133,24 +133,33 @@ describe('createClassifyQueue — timeout safety', () => {
     )
 
     const slow = queue.run('slow')
-    const following = queue.run('following')
+    // Attach the handler now: poisoning rejects queued callers as soon as the
+    // head times out, and a rejection delivered before anyone is listening is
+    // reported as unhandled. Real callers `await queue.run(...)` immediately.
+    const following = queue.run('following').then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
     await expect(slow).rejects.toThrow(/timed out/i)
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(started).toEqual(['slow'])
 
+    // The suspect session is never reused: `following` is rejected rather than
+    // run once the hung operation finally settles.
+    expect((await following)?.message).toMatch(/no longer accepting/i)
     firstGate.resolve('slow')
-    await expect(following).resolves.toBe('following')
-    expect(started).toEqual(['slow', 'following'])
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(started).toEqual(['slow'])
   })
 
-  it('keeps the pending slot until the underlying task settles', async () => {
+  it('frees pending slots on timeout so the queue never reports busy forever', async () => {
     const gate = deferred<string>()
     const queue = createClassifyQueue(() => gate.promise, {
       taskTimeoutMs: 20,
       maxPending: 2,
     })
     await expect(queue.run('a')).rejects.toThrow(/timed out/i)
-    expect(queue.pending()).toBe(1)
+    expect(queue.pending()).toBe(0)
     gate.resolve('done')
     await queue.drain()
     expect(queue.pending()).toBe(0)
@@ -183,5 +192,90 @@ describe('createClassifyQueue — drain', () => {
   it('resolves immediately on an idle queue', async () => {
     const queue = createClassifyQueue(async (t: string) => t)
     await expect(queue.drain()).resolves.toBeUndefined()
+  })
+})
+
+
+// The serialization tail is attached to the real, un-cancellable ONNX
+// operation so a timed-out run can never overlap the next one. That is correct,
+// but it means a task which never settles would otherwise strand the chain:
+// callers queued behind it never settle at all, `pending` never drops, and
+// `drain()` never resolves — so model:load and the pre-v1 migration hang too.
+// A timeout therefore poisons the queue: everyone gets an error, nothing new is
+// started on the suspect session, and the owner is told to rebuild.
+describe('createClassifyQueue — a task that never settles', () => {
+  it('rejects the caller queued behind the hung task instead of hanging forever', async () => {
+    const queue = createClassifyQueue(
+      (text: string) => (text === 'hang' ? new Promise<string>(() => {}) : Promise.resolve(text)),
+      { taskTimeoutMs: 20 },
+    )
+    const head = queue.run('hang')
+    const behind = queue.run('behind').then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+
+    await expect(head).rejects.toThrow(/timed out/i)
+    expect((await behind)?.message).toMatch(/no longer accepting/i)
+  })
+
+  it('never starts queued work on the suspect session', async () => {
+    const started: string[] = []
+    const queue = createClassifyQueue(
+      (text: string) => {
+        started.push(text)
+        return text === 'hang' ? new Promise<string>(() => {}) : Promise.resolve(text)
+      },
+      { taskTimeoutMs: 20 },
+    )
+    await expect(queue.run('hang')).rejects.toThrow(/timed out/i)
+    await expect(queue.run('after')).rejects.toThrow(/no longer accepting/i)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(started).toEqual(['hang'])
+  })
+
+  it('releases pending slots so the queue never reports busy forever', async () => {
+    const queue = createClassifyQueue(() => new Promise<string>(() => {}), {
+      taskTimeoutMs: 20,
+      maxPending: 2,
+    })
+    await expect(queue.run('a')).rejects.toThrow(/timed out/i)
+    expect(queue.pending()).toBe(0)
+  })
+
+  it('drain resolves so model:load and migration shutdown cannot hang', async () => {
+    const queue = createClassifyQueue(() => new Promise<string>(() => {}), { taskTimeoutMs: 20 })
+    await expect(queue.run('a')).rejects.toThrow(/timed out/i)
+    await expect(
+      Promise.race([
+        queue.drain().then(() => 'drained'),
+        new Promise((r) => setTimeout(() => r('HUNG'), 200)),
+      ]),
+    ).resolves.toBe('drained')
+  })
+
+  it('tells the owner to rebuild, exactly once', async () => {
+    const onTaskTimeout = vi.fn()
+    const queue = createClassifyQueue(() => new Promise<string>(() => {}), {
+      taskTimeoutMs: 20,
+      onTaskTimeout,
+    })
+    await expect(queue.run('a')).rejects.toThrow(/timed out/i)
+    await expect(queue.run('b')).rejects.toThrow(/no longer accepting/i)
+    expect(onTaskTimeout).toHaveBeenCalledTimes(1)
+  })
+
+  it('reset brings the queue back into service after a rebuild', async () => {
+    let hang = true
+    const queue = createClassifyQueue(
+      (text: string) => (hang ? new Promise<string>(() => {}) : Promise.resolve(text)),
+      { taskTimeoutMs: 20 },
+    )
+    await expect(queue.run('a')).rejects.toThrow(/timed out/i)
+
+    hang = false
+    queue.reset()
+    await expect(queue.run('b')).resolves.toBe('b')
+    expect(queue.pending()).toBe(0)
   })
 })

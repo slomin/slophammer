@@ -30,7 +30,9 @@
 //   5. /json/new returns before the navigation commits, so wait for the real
 //      document, not just readyState.
 import fs from 'node:fs'
-import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const CDP_PORT = readIntegerEnv('SLOPHAMMER_CDP_PORT', 9222, { min: 1, max: 65535 })
 const CDP = process.env.SLOPHAMMER_CDP ?? `http://127.0.0.1:${CDP_PORT}`
@@ -214,6 +216,49 @@ export async function selectLongParagraph(page, minWords = 45) {
     if(!ps.length) return null
     const r=document.createRange();r.selectNodeContents(ps[0])
     const g=getSelection();g.removeAllRanges();g.addRange(r);return g.toString()})()`)
+}
+
+// The card's deadline lives in content/state.ts. Read it rather than repeating
+// it, so changing the constant cannot leave this harness asserting a stale one.
+export function readCardWatchdogMs() {
+  const src = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '..', 'content/state.ts'),
+    'utf8',
+  )
+  const m = src.match(/CLASSIFY_TIMEOUT_MS\s*=\s*([\d_]+)/)
+  if (!m) throw new Error('could not read CLASSIFY_TIMEOUT_MS from content/state.ts')
+  return Number(m[1].replace(/_/g, ''))
+}
+
+/**
+ * Drive the two messages the content script reacts to and report whether the
+ * card stayed in 'loading' past its deadline. Shared by `pnpm debug watchdog`
+ * and the QA suite so both assert the same thing against the same constant.
+ */
+export async function driveWatchdog({ sw, page, tabId, observeMs, requestId, heartbeatMs = 10_000 }) {
+  await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'classify:started',
+    requestId:${JSON.stringify(requestId)},preview:'watchdog probe',wordCount:60,charCount:400}).catch(()=>{})`)
+  const started = Date.now()
+  let left = null
+  let nextBeat = 0
+  while (Date.now() - started < observeMs) {
+    const elapsed = Date.now() - started
+    if (elapsed >= nextBeat) {
+      await sw.eval(
+        `chrome.tabs.sendMessage(${tabId},{type:'model:status',status:'loading'}).catch(()=>{})`,
+      )
+      nextBeat = elapsed + heartbeatMs
+    }
+    const card = await page.eval(CARD_SNAPSHOT).catch(() => null)
+    if (card?.state && card.state !== 'loading' && !left) {
+      left = { at: Math.round(elapsed / 1000), state: card.state }
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  // Leave the card settled rather than spinning forever.
+  await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'classify:error',
+    requestId:${JSON.stringify(requestId)},tabId:${tabId},error:'watchdog probe finished'}).catch(()=>{})`)
+  return { left }
 }
 
 export async function tabIdForHref(sw, href) {
@@ -601,9 +646,12 @@ export async function offscreenDiagnostics() {
 // on its own, so drive the exact two messages the content script reacts to and
 // assert the card is still 'loading' well past the deadline.
 async function cmdWatchdog(args) {
-  const seconds = Number(args[0] ?? 70)
-  if (!Number.isFinite(seconds) || seconds <= 45) {
-    throw new Error(`watchdog duration must exceed the 45s deadline (received ${args[0]}).`)
+  const deadlineMs = readCardWatchdogMs()
+  const seconds = Number(args[0] ?? Math.round(deadlineMs / 1000) + 25)
+  if (!Number.isFinite(seconds) || seconds * 1000 <= deadlineMs) {
+    throw new Error(
+      `watchdog duration must exceed the card's ${deadlineMs / 1000}s deadline (received ${args[0]}).`,
+    )
   }
   const sw = await getServiceWorker()
   if (!sw) return say('service worker not reachable')
@@ -613,39 +661,21 @@ async function cmdWatchdog(args) {
   const tabId = await tabIdForHref(sw, href)
   if (tabId == null) return say(`could not find a tab matching ${href}`)
 
-  const requestId = `watchdog-${process.pid}`
-  await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'classify:started',
-    requestId:${JSON.stringify(requestId)},preview:'watchdog probe',wordCount:60,charCount:400}).catch(()=>{})`)
-  say(`armed the card watchdog in tab ${tabId}; heartbeating for ${seconds}s (deadline is 45s)…`)
+  say(`armed the card watchdog in tab ${tabId}; heartbeating for ${seconds}s (deadline is ${deadlineMs / 1000}s)…`)
+  const { left } = await driveWatchdog({
+    sw,
+    page,
+    tabId,
+    observeMs: seconds * 1000,
+    requestId: `watchdog-${process.pid}`,
+  })
 
-  const started = Date.now()
-  let leftLoading = null
-  let nextBeat = 0
-  while ((Date.now() - started) / 1000 < seconds) {
-    const elapsed = (Date.now() - started) / 1000
-    if (elapsed >= nextBeat) {
-      await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'model:status',status:'loading'}).catch(()=>{})`)
-      nextBeat = elapsed + 10
-    }
-    const card = await page.eval(CARD_SNAPSHOT).catch(() => null)
-    if (card?.state && card.state !== 'loading' && !leftLoading) {
-      leftLoading = { at: elapsed, state: card.state, error: card.error }
-    }
-    if (Math.round(elapsed) % 15 === 0) {
-      say(`  t=${elapsed.toFixed(0)}s card=${card?.state} err=${card?.error ?? 'none'}`)
-    }
-    await new Promise((r) => setTimeout(r, 2000))
-  }
-
-  if (leftLoading) {
-    say(`FAILED: card left 'loading' after ${leftLoading.at.toFixed(0)}s — ${JSON.stringify(leftLoading)}`)
+  if (left) {
+    say(`FAILED: card left 'loading' after ${left.at}s — ${JSON.stringify(left)}`)
     process.exitCode = 1
   } else {
-    say(`OK: card held 'loading' for ${seconds}s (> 45s) — heartbeats re-arm the watchdog`)
+    say(`OK: card held 'loading' for ${seconds}s (> ${deadlineMs / 1000}s) — heartbeats re-arm the watchdog`)
   }
-  // Leave the tab in a clean state rather than a card spinning forever.
-  await sw.eval(`chrome.tabs.sendMessage(${tabId},{type:'classify:error',
-    requestId:${JSON.stringify(requestId)},tabId:${tabId},error:'watchdog probe finished'}).catch(()=>{})`)
   sw.close()
   page.close()
 }

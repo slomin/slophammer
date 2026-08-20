@@ -21,10 +21,25 @@ export interface ClassifierWorkerClientOptions {
   onDiagnostic?: (message: string) => void
   initTimeoutMs?: number
   disposeTimeoutMs?: number
+  /**
+   * Backstop for a `classify` the worker never answers. The offscreen queue
+   * chains its serialization tail on this promise, so an unsettled request
+   * strands every request behind it. Must be shorter than the queue's own
+   * task timeout so this fires first and recovers cleanly.
+   */
+  classifyTimeoutMs?: number
 }
 
 const DEFAULT_INIT_TIMEOUT_MS = 10 * 60_000
 const DEFAULT_DISPOSE_TIMEOUT_MS = 10_000
+// Bounds the worst-case spinner: the offscreen heartbeat keeps the card's 45s
+// watchdog re-armed for as long as a request is in flight, so this is what
+// actually decides how long a user can stare at a loading card. Kept generous
+// because the only hardware measured here is Apple Silicon (1.2s WebGPU, 2.4s
+// CPU/WASM) — a false timeout on a slow Chromebook would restart a healthy
+// worker, which is worse than waiting. It fires well before the queue's
+// last-resort poison, so recovery is a clean worker restart.
+const DEFAULT_CLASSIFY_TIMEOUT_MS = 5 * 60_000
 
 function nextRequestId(sequence: number): string {
   return `worker-${sequence}`
@@ -41,6 +56,7 @@ export function createClassifierWorkerClient(
     onDiagnostic,
     initTimeoutMs = DEFAULT_INIT_TIMEOUT_MS,
     disposeTimeoutMs = DEFAULT_DISPOSE_TIMEOUT_MS,
+    classifyTimeoutMs = DEFAULT_CLASSIFY_TIMEOUT_MS,
   } = options
   let sequence = 0
   let settled = false
@@ -49,8 +65,20 @@ export function createClassifierWorkerClient(
   let diagnostics: RuntimeDiagnostics | undefined
   const pending = new Map<
     string,
-    { resolve: (result: ClassifyResult) => void; reject: (error: Error) => void }
+    {
+      resolve: (result: ClassifyResult) => void
+      reject: (error: Error) => void
+      timer?: ReturnType<typeof setTimeout>
+    }
   >()
+
+  const settle = (requestId: string) => {
+    const request = pending.get(requestId)
+    if (!request) return null
+    if (request.timer) clearTimeout(request.timer)
+    pending.delete(requestId)
+    return request
+  }
   const disposePending = new Map<string, () => void>()
 
   let resolveInit!: (repository: ClassifierRepository) => void
@@ -73,7 +101,10 @@ export function createClassifierWorkerClient(
       clearTimeout(initTimer)
       rejectInit(error)
     }
-    for (const request of pending.values()) request.reject(error)
+    for (const request of pending.values()) {
+      if (request.timer) clearTimeout(request.timer)
+      request.reject(error)
+    }
     pending.clear()
     for (const resolve of disposePending.values()) resolve()
     disposePending.clear()
@@ -86,11 +117,21 @@ export function createClassifierWorkerClient(
     get runtimeDiagnostics() {
       return diagnostics
     },
+    isDisposed: () => disposed,
     classify(text: string): Promise<ClassifyResult> {
       if (disposed) return Promise.reject(new Error('Classifier worker is no longer available.'))
       const requestId = nextRequestId(++sequence)
       const result = new Promise<ClassifyResult>((resolve, reject) => {
-        pending.set(requestId, { resolve, reject })
+        const timer = setTimeout(() => {
+          // The ONNX run cannot be interrupted from outside the worker, so the
+          // only real cancellation is terminating the worker. `fatal` does that
+          // and rejects everything outstanding, which lets the offscreen queue's
+          // tail advance instead of stranding every later request.
+          pending.delete(requestId)
+          reject(new Error(`Classification timed out after ${classifyTimeoutMs}ms.`))
+          fatal(`Classifier worker stopped responding after ${classifyTimeoutMs}ms.`)
+        }, classifyTimeoutMs)
+        pending.set(requestId, { resolve, reject, timer })
       })
       worker.postMessage({ type: 'classify', requestId, text })
       return result
@@ -108,7 +149,10 @@ export function createClassifierWorkerClient(
         worker.postMessage({ type: 'dispose', requestId })
       })
       const error = new Error('Classifier worker was disposed.')
-      for (const request of pending.values()) request.reject(error)
+      for (const request of pending.values()) {
+        if (request.timer) clearTimeout(request.timer)
+        request.reject(error)
+      }
       pending.clear()
       cleanupListeners()
       worker.terminate()
@@ -139,16 +183,14 @@ export function createClassifierWorkerClient(
         fatal(message.error)
         break
       case 'classify:result': {
-        const request = pending.get(message.requestId)
+        const request = settle(message.requestId)
         if (!request) break
-        pending.delete(message.requestId)
         request.resolve(message.result)
         break
       }
       case 'classify:error': {
-        const request = pending.get(message.requestId)
+        const request = settle(message.requestId)
         if (!request) break
-        pending.delete(message.requestId)
         request.reject(new Error(message.error))
         break
       }

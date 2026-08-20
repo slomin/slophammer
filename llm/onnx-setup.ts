@@ -54,10 +54,34 @@ export async function setupOnnxClassifier(
 ): Promise<ClassifierRepository> {
   const { runtimeBaseUrl, onProgress, onAttempt } = options
   const isolated = globalThis.crossOriginIsolated === true
-  const wasmThreads = chooseWasmThreadCount({
-    crossOriginIsolated: isolated,
-    hardwareConcurrency: navigator.hardwareConcurrency,
-  })
+
+  // Probe before touching the ORT environment: its flags are global and are
+  // read when the first session is created, so the thread count has to be
+  // decided up front.
+  let probe: WebGpuProbe<GPUAdapter>
+  try {
+    probe = await probeWebGpu()
+  } catch (error) {
+    probe = {
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  // The WebGPU path never runs an operator on the WASM backend, so asking for a
+  // thread pool there only spawns pthreads that park in `Atomics.wait` for the
+  // lifetime of the session. Reserve the pool for the path that uses it.
+  //
+  // The cost is that a WebGPU *session* failure falls back single-threaded,
+  // because the WASM module is already initialised by then. That is the rare
+  // path; the common ones — WebGPU works, or no adapter at all — both get the
+  // right pool.
+  const wasmThreads = probe.available
+    ? 1
+    : chooseWasmThreadCount({
+        crossOriginIsolated: isolated,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+      })
 
   // ORT environment flags are global and must be set before its first session.
   // Our dedicated classifier worker provides responsiveness and serialization,
@@ -67,7 +91,12 @@ export async function setupOnnxClassifier(
   ort.env.wasm.proxy = false
   ort.env.logLevel = 'error'
 
-  const prepared = loadAllModelFiles(onProgress).then((files): PreparedModel => {
+  // Read and validate the model *before* provider selection. Raising these
+  // inside a provider attempt made a corrupt or retired install look like a
+  // dual-provider failure — the user was told to restart Chrome instead of to
+  // reinstall the model, and the second attempt wasted a full session build on
+  // a failure that has nothing to do with the provider.
+  const model = await loadAllModelFiles(onProgress).then((files): PreparedModel => {
     const contract: unknown = JSON.parse(files.contractJson)
     validateSupportedContract(contract)
 
@@ -93,7 +122,6 @@ export async function setupOnnxClassifier(
     provider: RuntimeExecutionProvider,
     fallbackReason?: string,
   ): Promise<ClassifierRepository> => {
-    const model = await prepared
     const session = await ort.InferenceSession.create(
       model.model,
       provider === 'webgpu'
@@ -131,7 +159,7 @@ export async function setupOnnxClassifier(
   }
 
   const selected = await selectExecutionProvider({
-    probeWebGpu,
+    probeWebGpu: async () => probe,
     createWebGpu: async (adapter) => {
       // Reuse the adapter that proved WebGPU availability instead of probing a
       // second time inside ORT, which can race a device/driver state change.

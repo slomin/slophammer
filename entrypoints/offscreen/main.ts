@@ -1,7 +1,8 @@
 import { createClassifierRepository } from '@/llm'
 import type { ClassifierRepository } from '@/llm'
 import { startBrowserClassifierWorker } from '@/llm/classifier-worker-client'
-import { createClassifyQueue } from '@/llm/classify-queue'
+import { createClassifyQueue, type ClassifyQueue } from '@/llm/classify-queue'
+import type { ClassifyResult } from '@/llm/classify-result'
 import type { RuntimeDiagnostics } from '@/llm/execution-provider'
 import { isModelInstalled } from '@/llm/opfs-model-reader'
 import { createSharedClassifier } from '@/llm/shared-classifier'
@@ -43,6 +44,11 @@ const runtimeStats: RuntimeStats = {
   inFlight: 0,
   maxConcurrentRuns: 0,
 }
+
+// Declared before `publishRuntimeStats` reads it. As a `const` below, the
+// `?.` guard was decoration: an early call throws a TDZ ReferenceError that
+// optional chaining cannot catch.
+let classifyQueue: ClassifyQueue<string, ClassifyResult> | undefined
 
 function publishRuntimeStats(): void {
   document.documentElement.dataset.runtimeDiagnostics = JSON.stringify({
@@ -103,26 +109,79 @@ function classifierPromise(): Promise<ClassifierRepository> {
   return classifier.get()
 }
 
+// A worker that crashed or was terminated after a timeout leaves the shared
+// promise resolved with a dead repository, so every later classify would fail
+// forever. Rebuild instead of handing the corpse out again.
+async function activeClassifier(): Promise<ClassifierRepository> {
+  const repo = await classifierPromise()
+  if (!repo.isDisposed?.()) return repo
+  log.warn('classifier session is gone — rebuilding before this request')
+  forgetDiagnostics()
+  const next = trackFactory()
+  classifier.replace(next)
+  return next
+}
+
+// Diagnostics describe a session that exists. Keeping them after one is
+// disposed makes `pnpm debug status` and the QA suite report a live provider
+// for a classifier that is not running.
+function forgetDiagnostics(): void {
+  runtimeStats.diagnostics = undefined
+  publishRuntimeStats()
+}
+
+async function recoverFromWedge(): Promise<void> {
+  const previous = classifier.current()
+  forgetDiagnostics()
+  const blocked = Promise.reject<ClassifierRepository>(
+    new Error('Classifier is restarting after a wedged run.'),
+  )
+  blocked.catch(() => {})
+  classifier.replace(blocked)
+  const old = await previous?.catch(() => null)
+  if (old?.dispose) {
+    try {
+      await old.dispose()
+    } catch (err) {
+      log.warn('failed to release the wedged session', String(err))
+    }
+  }
+  classifier.replace(trackFactory())
+  classifyQueue?.reset()
+  log.info('classifier rebuilt after a wedged run')
+}
+
 // Every classification goes through this queue so overlapping requests can
 // never reach the ONNX Runtime session at the same time. Resolving the shared
 // promise inside the task means a re-initialised classifier (model:load) is picked up
 // by the next queued request.
-const classifyQueue = createClassifyQueue((text: string) =>
-  classifierPromise().then(async (repo) => {
-    runtimeStats.runCount += 1
-    runtimeStats.inFlight += 1
-    runtimeStats.maxConcurrentRuns = Math.max(
-      runtimeStats.maxConcurrentRuns,
-      runtimeStats.inFlight,
-    )
-    publishRuntimeStats()
-    try {
-      return await repo.classify(text)
-    } finally {
-      runtimeStats.inFlight -= 1
+classifyQueue = createClassifyQueue(
+  (text: string) =>
+    activeClassifier().then(async (repo) => {
+      runtimeStats.runCount += 1
+      runtimeStats.inFlight += 1
+      runtimeStats.maxConcurrentRuns = Math.max(
+        runtimeStats.maxConcurrentRuns,
+        runtimeStats.inFlight,
+      )
       publishRuntimeStats()
-    }
-  }),
+      try {
+        return await repo.classify(text)
+      } finally {
+        runtimeStats.inFlight -= 1
+        publishRuntimeStats()
+      }
+    }),
+  {
+    // A task that outlives this is stuck behind something the worker-level
+    // timeout could not recover. The queue stops taking work rather than
+    // starting a second run on a session whose first run is still alive, so
+    // rebuild the classifier and put it back into service.
+    onTaskTimeout: () => {
+      log.error('a classification exceeded the queue timeout — rebuilding the classifier')
+      void recoverFromWedge()
+    },
+  },
 )
 
 publishRuntimeStats()
@@ -135,13 +194,13 @@ log.info('offscreen booted')
 // has drained, and release what we are dropping.
 async function reinitialiseClassifier(): Promise<void> {
   log.info('model:load received — re-initialising classifier', {
-    queued: classifyQueue.pending(),
+    queued: classifyQueue?.pending() ?? 0,
   })
   const previous = classifier.current()
-  const next = classifyQueue
-    .drain()
+  const next = (classifyQueue?.drain() ?? Promise.resolve())
     .then(async () => {
       const old = await previous?.catch(() => null)
+      forgetDiagnostics()
       if (old?.dispose) {
         try {
           await old.dispose()
@@ -154,14 +213,16 @@ async function reinitialiseClassifier(): Promise<void> {
     })
     .then((repo) => repo)
   classifier.replace(next)
+  classifyQueue?.reset()
   next.catch((err) => log.warn('classifier unavailable', String(err)))
 }
 
 async function shutdownClassifier(): Promise<void> {
   const previous = classifier.current()
-  await classifyQueue.drain()
+  await classifyQueue?.drain()
   const old = await previous?.catch(() => null)
   if (old?.dispose) await old.dispose()
+  forgetDiagnostics()
   const blocked = Promise.reject<ClassifierRepository>(new Error('SlopHammer update in progress.'))
   blocked.catch(() => {})
   classifier.replace(blocked)
@@ -209,7 +270,7 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
     requestId,
     tabId,
     length: text.length,
-    queued: classifyQueue.pending(),
+    queued: classifyQueue?.pending() ?? 0,
   })
   try {
     const wordCount = countWords(text)
@@ -223,7 +284,7 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
       result = await withHeartbeat(
         async () => {
           await ensureMigrationReady()
-          return classifyQueue.run(text)
+          return classifyQueue!.run(text)
         },
         () => { void broadcast({ type: 'model:status', status: 'loading' }) },
         HEARTBEAT_MS,

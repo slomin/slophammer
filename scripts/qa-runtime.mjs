@@ -33,15 +33,22 @@ import {
   tabIdForHref,
   targets,
   waitForCard,
+  readCardWatchdogMs,
+  driveWatchdog,
 } from './debug-extension.mjs'
-import { readFileSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 const argv = process.argv.slice(2)
 const flag = (name, dflt) => {
   const i = argv.indexOf(name)
-  return i === -1 ? dflt : argv[i + 1]
+  if (i === -1) return dflt
+  const value = argv[i + 1]
+  // A trailing `--expect` with no value must fail loudly, not silently turn the
+  // assertion off.
+  if (value === undefined || value.startsWith('--')) {
+    say(`${name} requires a value`)
+    process.exit(1)
+  }
+  return value
 }
 const has = (name) => argv.includes(name)
 
@@ -74,15 +81,9 @@ const WARM_MS = 30_000
 const LOADING_MS = 10_000 // time for a dispatch to take the card back to 'loading'
 const DRAIN_MS = 120_000 // a 6-deep backlog at ~2.5s each
 
-// Read the card's deadline from source so this check stays correct if the
-// constant moves, and so it runs only just past it rather than a fixed 70s.
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const WATCHDOG_MS = (() => {
-  const src = readFileSync(resolve(repoRoot, 'content/state.ts'), 'utf8')
-  const m = src.match(/CLASSIFY_TIMEOUT_MS\s*=\s*([\d_]+)/)
-  if (!m) throw new Error('could not read CLASSIFY_TIMEOUT_MS from content/state.ts')
-  return Number(m[1].replace(/_/g, ''))
-})()
+// The deadline is read from content/state.ts by the shared helper, so this
+// runs just past whatever the constant currently is.
+const WATCHDOG_MS = readCardWatchdogMs()
 const WATCHDOG_OBSERVE_MS = WATCHDOG_MS + 5_000
 
 const results = []
@@ -173,27 +174,13 @@ async function runWatchdog() {
   try {
     const id = await tabIdForHref(sw, await tab.eval('location.href'))
     if (id == null) throw new Error('no tab id for the watchdog page')
-    const rid = `qa-watchdog-${process.pid}`
-    await sw.eval(`chrome.tabs.sendMessage(${id},{type:'classify:started',
-      requestId:${JSON.stringify(rid)},preview:'watchdog probe',wordCount:60,charCount:400}).catch(()=>{})`)
-    const started = Date.now()
-    let left = null
-    let nextBeat = 0
-    while (Date.now() - started < WATCHDOG_OBSERVE_MS) {
-      const elapsed = Date.now() - started
-      if (elapsed >= nextBeat) {
-        await sw.eval(
-          `chrome.tabs.sendMessage(${id},{type:'model:status',status:'loading'}).catch(()=>{})`,
-        )
-        nextBeat = elapsed + 10_000
-      }
-      const card = await tab.eval(CARD_SNAPSHOT).catch(() => null)
-      if (card?.state && card.state !== 'loading' && !left) {
-        left = { at: Math.round(elapsed / 1000), state: card.state }
-      }
-      await new Promise((r) => setTimeout(r, 1000))
-    }
-    return { left }
+    return await driveWatchdog({
+      sw,
+      page: tab,
+      tabId: id,
+      observeMs: WATCHDOG_OBSERVE_MS,
+      requestId: `qa-watchdog-${process.pid}`,
+    })
   } finally {
     await closeTab(tab)
   }
@@ -205,9 +192,17 @@ const watchdogRun = WATCHDOG ? runWatchdog().catch((error) => ({ error })) : nul
 // checks, so start them now and classify once the fixture checks are done.
 const preload = async (url, prepare) => {
   const tab = await openTab(url, { bringToFront: false })
-  if (prepare) await prepare(tab)
-  const body = await selectLongParagraph(tab)
-  return { tab, body }
+  try {
+    if (prepare) await prepare(tab)
+    const body = await selectLongParagraph(tab)
+    if (!body) throw new Error(`no 40+ word paragraph on ${url}`)
+    return { tab, body }
+  } catch (error) {
+    // Leaking the tab would leave an extra page on the fixture's host:port,
+    // exactly the wrong-tab hazard the ?qa= convention exists to prevent.
+    await closeTab(tab).catch(() => {})
+    throw error
+  }
 }
 const hostilePreload = preload(HOSTILE, (t) =>
   // The transformed-ancestor bug only showed with the page scrolled.
@@ -241,13 +236,17 @@ try {
     : null
   probe?.close()
   browserWebGpu = adapter?.adapter === true && !report.disabled
+  // Assert the two independent sources agree. Passing on "chrome://gpu mentions
+  // WebGPU" was unfalsifiable — every Chrome mentions it either way.
+  const agree = report.disabled === !(adapter?.adapter === true)
   record(
     'webgpu-evidence',
-    report.mentioned,
-    `chrome://gpu disabled=${report.disabled}, offscreen adapter=${adapter?.adapter}`,
+    report.mentioned && adapter !== null && agree,
+    `chrome://gpu disabled=${report.disabled}, offscreen adapter=${adapter?.adapter}, agree=${agree}`,
   )
 } catch (error) {
   fail('webgpu-evidence', error)
+  browserWebGpu = null
 }
 
 let baseline = null
@@ -275,7 +274,13 @@ try {
     `${provider} threads=${diag?.wasmThreads} coi=${diag?.crossOriginIsolated}${reason}` +
       (EXPECT ? ` (expected ${EXPECT})` : ''),
   )
-  if (browserWebGpu !== null) {
+  if (browserWebGpu === null) {
+    record(
+      'provider-matches-browser',
+      false,
+      'no browser WebGPU evidence — cannot cross-check the chosen provider',
+    )
+  } else {
     record(
       'provider-matches-browser',
       browserWebGpu ? provider === 'webgpu' : provider === 'wasm',

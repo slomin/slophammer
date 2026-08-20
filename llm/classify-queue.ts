@@ -15,6 +15,12 @@ export interface ClassifyQueueOptions {
    * wedge, just serialized. Generous enough not to fire on a slow cold load.
    */
   taskTimeoutMs?: number
+  /**
+   * Called once when a task exceeds `taskTimeoutMs`. The session behind that
+   * task is suspect — the work is still running and cannot be cancelled — so
+   * the owner should dispose and rebuild it, then call `reset()`.
+   */
+  onTaskTimeout?: () => void
 }
 
 export interface ClassifyQueue<T, R> {
@@ -22,10 +28,15 @@ export interface ClassifyQueue<T, R> {
   pending(): number
   /** Resolves once everything currently queued has settled. */
   drain(): Promise<void>
+  /** Return to service after the owner has rebuilt the classifier. */
+  reset(): void
 }
 
 export const DEFAULT_MAX_PENDING = 8
 export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
+
+export const QUEUE_POISONED_MESSAGE =
+  'Classifier is no longer accepting work — a previous run timed out and the session is being rebuilt.'
 
 export function createClassifyQueue<T, R>(
   task: (input: T) => Promise<R> | R,
@@ -37,13 +48,43 @@ export function createClassifyQueue<T, R>(
   // one-at-a-time execution.
   let tail: Promise<unknown> = Promise.resolve()
   let pending = 0
+  // A timed-out task is still running inside the ONNX session. We must not
+  // start anything else on that session, but we also must not leave callers
+  // waiting on a chain that will never advance, so the queue stops taking work
+  // until the owner rebuilds. Both wedges are avoided; neither is traded for
+  // the other.
+  let poisoned = false
+  // Tasks still waiting for their turn. Their `operation` is chained onto the
+  // hung tail, so it will never settle on its own — they have to be rejected
+  // explicitly or their callers wait forever.
+  const waiting = new Set<(error: Error) => void>()
+
+  function poison(): void {
+    if (poisoned) return
+    poisoned = true
+    // Nothing queued can ever run now, so free the slots and let `drain()`
+    // resolve — otherwise model:load and the pre-v1 migration shutdown hang.
+    pending = 0
+    tail = Promise.resolve()
+    for (const abort of waiting) abort(new Error(QUEUE_POISONED_MESSAGE))
+    waiting.clear()
+    options.onTaskTimeout?.()
+  }
 
   return {
     pending: () => pending,
 
     drain: () => tail.then(() => undefined, () => undefined),
 
+    reset() {
+      poisoned = false
+      pending = 0
+      tail = Promise.resolve()
+      waiting.clear()
+    },
+
     run(input: T): Promise<R> {
+      if (poisoned) return Promise.reject(new Error(QUEUE_POISONED_MESSAGE))
       if (pending >= maxPending) {
         return Promise.reject(
           new Error(`Classifier is busy — ${pending} requests are already queued.`),
@@ -58,7 +99,16 @@ export function createClassifyQueue<T, R>(
       const started = new Promise<void>((resolve) => {
         markStarted = resolve
       })
+      let abort!: (error: Error) => void
+      const aborted = new Promise<never>((_, reject) => {
+        abort = reject
+      })
+      aborted.catch(() => {})
+      waiting.add(abort)
       const operation = tail.then(() => {
+        // A queue poisoned while this task waited must not start it.
+        if (poisoned) throw new Error(QUEUE_POISONED_MESSAGE)
+        waiting.delete(abort)
         markStarted()
         return Promise.resolve(task(input))
       })
@@ -66,19 +116,24 @@ export function createClassifyQueue<T, R>(
         () => undefined,
         () => undefined,
       )
-      void operation.finally(() => {
-        pending -= 1
-      }).catch(() => {})
+      void operation
+        .finally(() => {
+          if (!poisoned) pending -= 1
+        })
+        .catch(() => {})
 
       // Waiting in the FIFO is not execution time. Arm only when this task
-      // reaches the head, matching the pre-hardening behaviour.
-      return started.then(
+      // reaches the head, matching the pre-hardening behaviour. A task that
+      // never reaches the head still settles, because poisoning rejects it.
+      const executed = started.then(
         () =>
           new Promise<R>((resolve, reject) => {
-            const timer = setTimeout(
-              () => reject(new Error(`Classification timed out after ${taskTimeoutMs}ms.`)),
-              taskTimeoutMs,
-            )
+            const timer = setTimeout(() => {
+              // Reject this caller first, then poison — the poison sweep must
+              // not overwrite the specific timeout error with the generic one.
+              reject(new Error(`Classification timed out after ${taskTimeoutMs}ms.`))
+              poison()
+            }, taskTimeoutMs)
             operation.then(
               (value) => {
                 clearTimeout(timer)
@@ -91,6 +146,7 @@ export function createClassifyQueue<T, R>(
             )
           }),
       )
+      return Promise.race([executed, aborted])
     },
   }
 }

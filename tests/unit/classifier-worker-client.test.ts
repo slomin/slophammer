@@ -131,3 +131,58 @@ describe('classifier worker client', () => {
     expect(worker.terminate).toHaveBeenCalledOnce()
   })
 })
+
+
+// A classify request the worker never answers must not leave the promise
+// unsettled: the offscreen queue chains its serialization tail on it, so an
+// unsettled request strands every later request behind it. Terminating the
+// worker is what actually cancels the in-flight ONNX run — the session cannot
+// be interrupted any other way.
+describe('classifier worker client — an unanswered classify', () => {
+  async function readyClient(classifyTimeoutMs: number) {
+    const worker = new FakeWorker()
+    const ready = createClassifierWorkerClient({
+      worker,
+      runtimeBaseUrl: 'chrome-extension://id/ort/',
+      classifyTimeoutMs,
+    })
+    worker.emit({
+      type: 'init:ready',
+      diagnostics: {
+        executionProvider: 'wasm',
+        wasmThreads: 4,
+        crossOriginIsolated: true,
+      },
+    })
+    return { worker, repo: await ready }
+  }
+
+  it('rejects the request rather than hanging forever', async () => {
+    const { repo } = await readyClient(20)
+    await expect(repo.classify('text')).rejects.toThrow(/timed out/i)
+  })
+
+  it('terminates the worker, which is the only way to stop the ONNX run', async () => {
+    const { worker, repo } = await readyClient(20)
+    await expect(repo.classify('text')).rejects.toThrow(/timed out/i)
+    expect(worker.terminate).toHaveBeenCalled()
+  })
+
+  it('reports itself disposed so the owner rebuilds instead of reusing it', async () => {
+    const { repo } = await readyClient(20)
+    expect(repo.isDisposed?.()).toBe(false)
+    await expect(repo.classify('text')).rejects.toThrow(/timed out/i)
+    expect(repo.isDisposed?.()).toBe(true)
+    await expect(repo.classify('again')).rejects.toThrow(/no longer available/i)
+  })
+
+  it('does not fire once the worker has answered', async () => {
+    const { worker, repo } = await readyClient(60)
+    const pending = repo.classify('text')
+    const posted = worker.posted.at(-1) as { requestId: string }
+    worker.emit({ type: 'classify:result', requestId: posted.requestId, result })
+    await expect(pending).resolves.toMatchObject({ verdict: 'flagged' })
+    await new Promise((r) => setTimeout(r, 90))
+    expect(worker.terminate).not.toHaveBeenCalled()
+  })
+})

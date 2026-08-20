@@ -39,7 +39,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function classifyWasmFailure(message: string): RuntimeInitializationErrorCode {
+function classifyFailure(message: string): RuntimeInitializationErrorCode {
   if (
     /out of memory|not enough memory|failed to allocate|allocation failed|array ?buffer allocation|memory access out of bounds/i.test(
       message,
@@ -77,13 +77,34 @@ function actionableMessage(code: RuntimeInitializationErrorCode): string {
   }
 }
 
+// Most specific first. Whichever attempt produced a recognisable cause is the
+// one worth telling the user about, regardless of which provider it came from.
+const CODE_PRECEDENCE: RuntimeInitializationErrorCode[] = [
+  'allocation-failure',
+  'corrupt-model',
+  'unsupported-runtime',
+  'provider-initialization',
+]
+
+function mostActionable(...messages: string[]): RuntimeInitializationErrorCode {
+  const codes = messages.map(classifyFailure)
+  for (const candidate of CODE_PRECEDENCE) {
+    if (codes.includes(candidate)) return candidate
+  }
+  return 'provider-initialization'
+}
+
 export class RuntimeInitializationError extends Error {
   readonly code: RuntimeInitializationErrorCode
   readonly webGpuError: string
   readonly wasmError: string
 
   constructor(webGpuError: string, wasmError: string) {
-    const code = classifyWasmFailure(wasmError)
+    // The WASM error is the last thing that happened, but not necessarily the
+    // thing that explains the failure: an out-of-memory on WebGPU followed by a
+    // generic WASM error would otherwise advise restarting Chrome rather than
+    // freeing memory.
+    const code = mostActionable(wasmError, webGpuError)
     super(actionableMessage(code))
     this.name = 'RuntimeInitializationError'
     this.code = code
