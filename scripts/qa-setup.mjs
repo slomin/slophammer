@@ -2,7 +2,7 @@
 // One-shot QA bootstrap. Idempotent and safe to re-run.
 //
 //   1. Build the extension if .output/chrome-mv3 is missing or stale.
-//   2. Kill anything bound to :8765 (test-page) and :9222 (Chrome CDP).
+//   2. Kill anything bound to :8765 (test-page) and the configured Chrome CDP port.
 //   3. Spawn the test-page server (detached).
 //   4. Spawn Chrome for Testing with http://localhost:8765/ as the startup URL.
 //   5. Wait for both to be up.
@@ -10,7 +10,8 @@
 //
 // On first run you still have to drop the model zip onto the options page once
 // — the persistent profile at ~/.slophammer-chrome-profile preserves the
-// install across restarts and rebuilds.
+// install across restarts and rebuilds. Override the browser isolation with
+// SLOPHAMMER_CHROME_PROFILE and SLOPHAMMER_CDP_PORT when running parallel QA.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -23,23 +24,55 @@ const repoRoot = resolve(__dirname, '..')
 process.chdir(repoRoot)
 
 const TEST_PAGE_PORT = 8765
-const CDP_PORT = 9222
+const CDP_PORT = readPort('SLOPHAMMER_CDP_PORT', 9222)
+const CHROME_PROFILE = resolve(
+  process.env.SLOPHAMMER_CHROME_PROFILE ??
+    resolve(process.env.HOME ?? '', '.slophammer-chrome-profile'),
+)
 const BUILD_OUT = resolve(repoRoot, '.output/chrome-mv3')
-const CONTENT_SRC = resolve(repoRoot, 'content')
-const ENTRY_SRC = resolve(repoRoot, 'entrypoints')
+const BUILD_INPUTS = [
+  'background',
+  'content',
+  'entrypoints',
+  'install',
+  'llm',
+  'messaging',
+  'migration',
+  'public',
+  'settings',
+  'shared',
+  'package.json',
+  'pnpm-lock.yaml',
+  'tsconfig.json',
+  'wxt.config.ts',
+].map((entry) => resolve(repoRoot, entry))
 
 const log = (m) => console.log(`[qa] ${m}`)
 
-function latestMtime(dir) {
-  let latest = 0
-  const walk = (d) => {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
-      const p = resolve(d, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else latest = Math.max(latest, statSync(p).mtimeMs)
+function readPort(name, fallback) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return fallback
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${name} must be an integer from 1 to 65535 (received ${JSON.stringify(raw)}).`)
+  }
+  return value
+}
+
+function latestMtime(path) {
+  if (!existsSync(path)) return 0
+  const stat = statSync(path)
+  if (!stat.isDirectory()) return stat.mtimeMs
+
+  let latest = stat.mtimeMs
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const child = resolve(path, entry.name)
+    if (entry.isDirectory()) {
+      latest = Math.max(latest, latestMtime(child))
+    } else {
+      latest = Math.max(latest, statSync(child).mtimeMs)
     }
   }
-  walk(dir)
   return latest
 }
 
@@ -52,7 +85,7 @@ function ensureBuilt() {
     return
   }
   const outMtime = statSync(out).mtimeMs
-  const srcMtime = Math.max(latestMtime(CONTENT_SRC), latestMtime(ENTRY_SRC))
+  const srcMtime = Math.max(...BUILD_INPUTS.map(latestMtime))
   if (srcMtime > outMtime) {
     log('sources newer than build — running pnpm build')
     const r = spawnSync('pnpm', ['build'], { stdio: 'inherit' })
@@ -90,7 +123,7 @@ function suppressSessionRestore() {
   // (These two together are more reliable than either alone — Chrome rewrites
   // exit_type to "Crashed" on startup, but an empty Sessions/ dir still
   // guarantees no tabs get reopened.)
-  const profile = resolve(process.env.HOME ?? '', '.slophammer-chrome-profile')
+  const profile = CHROME_PROFILE
   if (!existsSync(profile)) return
   const sessionsDir = resolve(profile, 'Default/Sessions')
   try {
@@ -140,7 +173,7 @@ async function main() {
   console.log('================================================================')
   console.log(`  test page : http://localhost:${TEST_PAGE_PORT}/`)
   console.log(`  CDP       : http://localhost:${CDP_PORT}`)
-  console.log(`  profile   : ${process.env.HOME}/.slophammer-chrome-profile`)
+  console.log(`  profile   : ${CHROME_PROFILE}`)
   console.log('')
   console.log('  Select a paragraph on the test page → right-click → Check with')
   console.log('  SlopHammer. First run: install the verified 350M model from the options page.')

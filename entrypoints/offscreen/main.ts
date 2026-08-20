@@ -1,8 +1,10 @@
 import { createClassifierRepository } from '@/llm'
 import type { ClassifierRepository } from '@/llm'
+import { startBrowserClassifierWorker } from '@/llm/classifier-worker-client'
 import { createClassifyQueue } from '@/llm/classify-queue'
-import { setupOnnxClassifier } from '@/llm/onnx-setup'
+import type { RuntimeDiagnostics } from '@/llm/execution-provider'
 import { isModelInstalled } from '@/llm/opfs-model-reader'
+import { createSharedClassifier } from '@/llm/shared-classifier'
 import { MIN_SELECTION_WORDS, countWords } from '@/llm/input-policy'
 import { withHeartbeat } from '@/llm/inference-heartbeat'
 import { createLogger, installErrorForwarding } from '@/messaging/logger'
@@ -27,23 +29,66 @@ function broadcast(message: ExtensionMessage): Promise<void> {
   })
 }
 
+interface RuntimeStats {
+  diagnostics?: RuntimeDiagnostics
+  sessionCreations: number
+  runCount: number
+  inFlight: number
+  maxConcurrentRuns: number
+}
+
+const runtimeStats: RuntimeStats = {
+  sessionCreations: 0,
+  runCount: 0,
+  inFlight: 0,
+  maxConcurrentRuns: 0,
+}
+
+function publishRuntimeStats(): void {
+  document.documentElement.dataset.runtimeDiagnostics = JSON.stringify({
+    ...runtimeStats.diagnostics,
+    sessionCreations: runtimeStats.sessionCreations,
+    runCount: runtimeStats.runCount,
+    inFlight: runtimeStats.inFlight,
+    maxConcurrentRuns: runtimeStats.maxConcurrentRuns,
+    queueDepth: classifyQueue?.pending() ?? 0,
+  })
+}
+
 function startFactory(): Promise<ClassifierRepository> {
   return createClassifierRepository({
     isModelInstalled,
     createOnnxClassifier: () =>
-      setupOnnxClassifier((p) => {
-        const pct = Math.round(2 + (p.bytesRead / Math.max(1, p.totalBytes)) * 78)
-        broadcast({ type: 'model:status', status: 'loading', progress: pct })
+      startBrowserClassifierWorker({
+        runtimeBaseUrl: chrome.runtime.getURL('ort/'),
+        onProgress: (ratio) => {
+          const pct = Math.round(2 + ratio * 78)
+          void broadcast({ type: 'model:status', status: 'loading', progress: pct })
+        },
+        onAttempt: ({ provider, fallbackReason }) => {
+          void broadcast({ type: 'model:status', status: 'loading', provider })
+          if (provider === 'wasm') {
+            log.info('using local CPU/WASM fallback', { reason: fallbackReason })
+          } else {
+            log.debug('initializing WebGPU provider')
+          }
+        },
+        onDiagnostic: (diagnostic) => log.error('classifier initialization detail', diagnostic),
       }),
     onStatus: broadcast,
   })
 }
 
-// A rejected repoPromise is an expected state (no model installed, WebGPU
-// unavailable, corrupt install). Every classify surfaces the reason to the
-// user; this guard only stops it being reported as an unhandled rejection.
+// A rejected classifier promise is an expected state (no model installed or
+// neither provider could initialize). Every classify surfaces the reason to
+// the user; this guard only stops an unhandled-rejection report.
 function trackFactory(): Promise<ClassifierRepository> {
-  const p = startFactory()
+  const p = startFactory().then((repository) => {
+    runtimeStats.sessionCreations += 1
+    runtimeStats.diagnostics = repository.runtimeDiagnostics
+    publishRuntimeStats()
+    return repository
+  })
   p.catch((err) => log.warn('classifier unavailable', String(err)))
   return p
 }
@@ -52,20 +97,35 @@ function trackFactory(): Promise<ClassifierRepository> {
 // explicit model:load arrives. Eager startup can race a pre-v1 migration and
 // begin loading the retired model in the brief window before its journal is
 // created and the shutdown phase runs.
-let repoPromise: Promise<ClassifierRepository> | null = null
+const classifier = createSharedClassifier(trackFactory)
 
 function classifierPromise(): Promise<ClassifierRepository> {
-  if (!repoPromise) repoPromise = trackFactory()
-  return repoPromise
+  return classifier.get()
 }
 
 // Every classification goes through this queue so overlapping requests can
-// never reach the ONNX Runtime session at the same time. Resolving repoPromise
-// inside the task means a re-initialised classifier (model:load) is picked up
+// never reach the ONNX Runtime session at the same time. Resolving the shared
+// promise inside the task means a re-initialised classifier (model:load) is picked up
 // by the next queued request.
 const classifyQueue = createClassifyQueue((text: string) =>
-  classifierPromise().then((repo) => repo.classify(text)),
+  classifierPromise().then(async (repo) => {
+    runtimeStats.runCount += 1
+    runtimeStats.inFlight += 1
+    runtimeStats.maxConcurrentRuns = Math.max(
+      runtimeStats.maxConcurrentRuns,
+      runtimeStats.inFlight,
+    )
+    publishRuntimeStats()
+    try {
+      return await repo.classify(text)
+    } finally {
+      runtimeStats.inFlight -= 1
+      publishRuntimeStats()
+    }
+  }),
 )
+
+publishRuntimeStats()
 
 log.info('offscreen booted')
 
@@ -77,8 +137,8 @@ async function reinitialiseClassifier(): Promise<void> {
   log.info('model:load received — re-initialising classifier', {
     queued: classifyQueue.pending(),
   })
-  const previous = repoPromise
-  repoPromise = classifyQueue
+  const previous = classifier.current()
+  const next = classifyQueue
     .drain()
     .then(async () => {
       const old = await previous?.catch(() => null)
@@ -90,20 +150,21 @@ async function reinitialiseClassifier(): Promise<void> {
           log.warn('failed to release the previous session', String(err))
         }
       }
-      return startFactory()
+      return trackFactory()
     })
     .then((repo) => repo)
-  repoPromise.catch((err) => log.warn('classifier unavailable', String(err)))
+  classifier.replace(next)
+  next.catch((err) => log.warn('classifier unavailable', String(err)))
 }
 
 async function shutdownClassifier(): Promise<void> {
-  const previous = repoPromise
+  const previous = classifier.current()
   await classifyQueue.drain()
   const old = await previous?.catch(() => null)
   if (old?.dispose) await old.dispose()
   const blocked = Promise.reject<ClassifierRepository>(new Error('SlopHammer update in progress.'))
   blocked.catch(() => {})
-  repoPromise = blocked
+  classifier.replace(blocked)
 }
 
 function requestStorageClear(): Promise<void> {
@@ -157,14 +218,23 @@ async function handleClassifyRun(message: ClassifyRunMessage): Promise<void> {
         `Too short to judge — select at least ${MIN_SELECTION_WORDS} words (${wordCount} selected)`,
       )
     }
-    const result = await withHeartbeat(
-      async () => {
-        await ensureMigrationReady()
-        return classifyQueue.run(text)
-      },
-      () => { void broadcast({ type: 'model:status', status: 'loading' }) },
-      HEARTBEAT_MS,
-    )
+    let result
+    try {
+      result = await withHeartbeat(
+        async () => {
+          await ensureMigrationReady()
+          return classifyQueue.run(text)
+        },
+        () => { void broadcast({ type: 'model:status', status: 'loading' }) },
+        HEARTBEAT_MS,
+      )
+    } finally {
+      // The in-task publish runs inside the queue's own task, before the queue
+      // decrements its pending count, so the snapshot it leaves behind always
+      // overstates queueDepth by one. Republish once the queue has settled so
+      // `pnpm debug status` reports the real depth.
+      publishRuntimeStats()
+    }
     log.info('classify:result dispatching', {
       requestId,
       verdict: result.verdict,

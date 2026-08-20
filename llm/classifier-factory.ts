@@ -40,7 +40,10 @@ export async function createClassifierRepository(
   onStatus(status({ status: 'loading', progress: 1 }))
   try {
     const repo = await createOnnxClassifier()
-    onStatus(status({ status: 'ready' }))
+    onStatus(status({
+      status: 'ready',
+      provider: repo.runtimeDiagnostics?.executionProvider,
+    }))
     return repo
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

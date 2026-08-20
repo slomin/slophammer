@@ -25,7 +25,7 @@ export interface ClassifyQueue<T, R> {
 }
 
 export const DEFAULT_MAX_PENDING = 8
-export const DEFAULT_TASK_TIMEOUT_MS = 120_000
+export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 
 export function createClassifyQueue<T, R>(
   task: (input: T) => Promise<R> | R,
@@ -51,14 +51,35 @@ export function createClassifyQueue<T, R>(
       }
       pending += 1
 
-      const result = tail.then(
+      // `operation` is the real, non-cancellable ONNX work. The caller-facing
+      // timeout must not replace it as the serialization tail: doing so lets a
+      // later task enter the same session while timed-out work is still alive.
+      let markStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve
+      })
+      const operation = tail.then(() => {
+        markStarted()
+        return Promise.resolve(task(input))
+      })
+      tail = operation.then(
+        () => undefined,
+        () => undefined,
+      )
+      void operation.finally(() => {
+        pending -= 1
+      }).catch(() => {})
+
+      // Waiting in the FIFO is not execution time. Arm only when this task
+      // reaches the head, matching the pre-hardening behaviour.
+      return started.then(
         () =>
           new Promise<R>((resolve, reject) => {
             const timer = setTimeout(
               () => reject(new Error(`Classification timed out after ${taskTimeoutMs}ms.`)),
               taskTimeoutMs,
             )
-            Promise.resolve(task(input)).then(
+            operation.then(
               (value) => {
                 clearTimeout(timer)
                 resolve(value)
@@ -70,14 +91,6 @@ export function createClassifyQueue<T, R>(
             )
           }),
       )
-      // Swallow this task's rejection on the chaining branch only, so one
-      // failed inference can't stall everything queued behind it. The caller
-      // still receives the rejection through `result`.
-      tail = result.catch(() => {})
-
-      return result.finally(() => {
-        pending -= 1
-      })
     },
   }
 }

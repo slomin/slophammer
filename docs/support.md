@@ -9,10 +9,22 @@ SlopHammer checks selected webpage text for AI-like signals locally in Chrome.
 3. Open a normal HTTP/HTTPS page and select at least 40 words.
 4. Right-click and choose **Check with SlopHammer**.
 
-SlopHammer v1 requires WebGPU. If Chrome reports WebGPU is unavailable, this device is not supported; there is no CPU fallback.
+SlopHammer prefers WebGPU. If WebGPU is unavailable or cannot start, SlopHammer
+automatically retries with its packaged CPU/WebAssembly fallback. Both providers run
+the same verified model locally; selected text is not sent anywhere for analysis.
+CPU analysis can be materially slower, especially on older Windows laptops and
+Chromebooks, so leave the result card open while it is working.
+
+Use a current Chrome release. If neither provider can start, first update and restart
+Chrome. If SlopHammer reports that it could not reserve enough memory, close other
+tabs or applications and try again. If it reports a corrupt model, open options and
+reinstall the verified model.
 
 Results are probabilistic and can be wrong. Consider them alongside other evidence.
 
 If installation or a pre-v1 migration fails, open options and use the displayed retry action. SlopHammer keeps the retired model unavailable and resumes the verified 350M install; it does not roll back.
 
-Report problems at https://github.com/slomin/slophammer/issues/new and include the Chrome version, OS, WebGPU availability, model/migration status, and the visible error text. Do not include private selected text.
+Report problems at https://github.com/slomin/slophammer/issues/new and include the
+Chrome version, OS, whether Chrome graphics acceleration is enabled, the runtime
+provider shown in SlopHammer diagnostics if available, model/migration status, and the
+visible error text. Do not include private selected text.

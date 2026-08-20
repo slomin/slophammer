@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createClassifyQueue } from '@/llm/classify-queue'
+import { createClassifyQueue, DEFAULT_TASK_TIMEOUT_MS } from '@/llm/classify-queue'
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -108,35 +108,51 @@ describe('createClassifyQueue', () => {
   })
 })
 
-// Serializing removed the concurrency wedge but introduced a new one: a task
-// that never settles leaves `tail` unsettled, so every later request queues
-// behind it forever and then starts rejecting as "busy".
-describe('createClassifyQueue — a hung task must not wedge the queue', () => {
+// A timed-out ONNX run cannot be cancelled. The caller may stop waiting, but
+// the serialization tail must remain attached to the real operation or a
+// second request can overlap it and recreate the original runtime wedge.
+describe('createClassifyQueue — timeout safety', () => {
+  it('allows slow CPU fallback work up to ten minutes by default', () => {
+    expect(DEFAULT_TASK_TIMEOUT_MS).toBe(10 * 60_000)
+  })
+
   it('times out a task that never settles', async () => {
     const queue = createClassifyQueue(() => new Promise<string>(() => {}), { taskTimeoutMs: 30 })
     await expect(queue.run('never')).rejects.toThrow(/timed out/i)
   })
 
-  it('lets later tasks run after one times out', async () => {
-    let call = 0
+  it('does not start later work while the timed-out operation is still running', async () => {
+    const firstGate = deferred<string>()
+    const started: string[] = []
     const queue = createClassifyQueue(
       (text: string) => {
-        call += 1
-        return call === 1 ? new Promise<string>(() => {}) : Promise.resolve(text)
+        started.push(text)
+        return text === 'slow' ? firstGate.promise : Promise.resolve(text)
       },
-      { taskTimeoutMs: 30 },
+      { taskTimeoutMs: 20 },
     )
-    await expect(queue.run('hangs')).rejects.toThrow(/timed out/i)
-    await expect(queue.run('fine')).resolves.toBe('fine')
+
+    const slow = queue.run('slow')
+    const following = queue.run('following')
+    await expect(slow).rejects.toThrow(/timed out/i)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(started).toEqual(['slow'])
+
+    firstGate.resolve('slow')
+    await expect(following).resolves.toBe('following')
+    expect(started).toEqual(['slow', 'following'])
   })
 
-  it('releases the pending slot when a task times out', async () => {
-    const queue = createClassifyQueue(() => new Promise<string>(() => {}), {
+  it('keeps the pending slot until the underlying task settles', async () => {
+    const gate = deferred<string>()
+    const queue = createClassifyQueue(() => gate.promise, {
       taskTimeoutMs: 20,
       maxPending: 2,
     })
     await expect(queue.run('a')).rejects.toThrow(/timed out/i)
-    await expect(queue.run('b')).rejects.toThrow(/timed out/i)
+    expect(queue.pending()).toBe(1)
+    gate.resolve('done')
+    await queue.drain()
     expect(queue.pending()).toBe(0)
   })
 })

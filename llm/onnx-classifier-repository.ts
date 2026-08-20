@@ -15,6 +15,7 @@ import {
   type TokenizerLike,
 } from './onnx-deps'
 import type { RuntimeContract } from './runtime-contract'
+import type { RuntimeDiagnostics } from './execution-provider'
 import { padInputIds } from './token-preparation'
 
 export interface OnnxClassifierDeps {
@@ -27,10 +28,15 @@ export interface OnnxClassifierDeps {
    * or another authoritative source. Never defaulted — see #10.
    */
   runtime: RuntimeContract
+  runtimeDiagnostics?: RuntimeDiagnostics
 }
 
 export class OnnxClassifierRepository implements ClassifierRepository {
-  constructor(private readonly deps: OnnxClassifierDeps) {}
+  readonly runtimeDiagnostics?: RuntimeDiagnostics
+
+  constructor(private readonly deps: OnnxClassifierDeps) {
+    this.runtimeDiagnostics = deps.runtimeDiagnostics
+  }
 
   async dispose(): Promise<void> {
     await this.deps.session.release?.()
