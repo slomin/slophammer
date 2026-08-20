@@ -12,6 +12,12 @@
 // — the persistent profile at ~/.slophammer-chrome-profile preserves the
 // install across restarts and rebuilds. Override the browser isolation with
 // SLOPHAMMER_CHROME_PROFILE and SLOPHAMMER_CDP_PORT when running parallel QA.
+//
+// Pass --no-webgpu to bring the browser up with WebGPU genuinely unavailable,
+// which is how the CPU/WASM fallback is exercised. It uses --disable-gpu:
+// --disable-features=WebGPU does NOT work, requestAdapter() still resolves
+// under it. Verify with `pnpm qa:runtime --expect wasm`, which cross-checks
+// chrome://gpu rather than trusting the flag.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -46,6 +52,8 @@ const BUILD_INPUTS = [
   'tsconfig.json',
   'wxt.config.ts',
 ].map((entry) => resolve(repoRoot, entry))
+
+const NO_WEBGPU = process.argv.includes('--no-webgpu')
 
 const log = (m) => console.log(`[qa] ${m}`)
 
@@ -160,7 +168,9 @@ async function main() {
   suppressSessionRestore()
 
   spawnDetached('node', ['scripts/serve-test-page.mjs'], 'test-page server')
-  spawnDetached('bash', ['scripts/launch-chrome.sh', `http://localhost:${TEST_PAGE_PORT}/`], 'Chrome for Testing')
+  const chromeArgs = ['scripts/launch-chrome.sh', `http://localhost:${TEST_PAGE_PORT}/`]
+  if (NO_WEBGPU) chromeArgs.push('--disable-gpu')
+  spawnDetached('bash', chromeArgs, `Chrome for Testing${NO_WEBGPU ? ' (WebGPU disabled)' : ''}`)
 
   log(`waiting for test-page on :${TEST_PAGE_PORT}`)
   await waitForPort(TEST_PAGE_PORT, '/', 30000)
@@ -175,8 +185,12 @@ async function main() {
   console.log(`  CDP       : http://localhost:${CDP_PORT}`)
   console.log(`  profile   : ${CHROME_PROFILE}`)
   console.log('')
+  console.log(`  WebGPU    : ${NO_WEBGPU ? 'DISABLED (--disable-gpu) — exercises the CPU/WASM fallback' : 'available'}`)
+  console.log('')
   console.log('  Select a paragraph on the test page → right-click → Check with')
   console.log('  SlopHammer. First run: install the verified 350M model from the options page.')
+  console.log('')
+  console.log(`  Runtime QA: pnpm qa:runtime${NO_WEBGPU ? ' --expect wasm' : ' --expect webgpu'}`)
   console.log('================================================================')
 }
 

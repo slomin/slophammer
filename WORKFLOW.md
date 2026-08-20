@@ -27,6 +27,9 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm test:e2e` | Playwright E2E against CfT. |
 | `pnpm typecheck` | `tsc --noEmit`. |
 | `pnpm setup:chrome` | One-time: install Chrome for Testing into `./chrome-for-testing/`. |
+| `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
+| `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
+| `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
@@ -41,6 +44,46 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
    - `http://127.0.0.1:8765/`
    - `http://127.0.0.1:8765/hostile`
    - a real site such as Reddit when validating cross-site CSS resilience
+
+## Runtime QA (execution providers)
+
+Two commands, one for each provider. `pnpm qa:runtime` checks WebGPU evidence,
+cold start, the chosen provider and its fallback reason, repeat runs on one
+session, 4-tab concurrency, a burst backlog, the hostile-CSS page, and console
+hygiene — then prints PASS/FAIL per check and exits non-zero if any failed.
+
+```
+pnpm qa                            # WebGPU available
+pnpm qa:runtime --expect webgpu
+
+pnpm qa --no-webgpu                # WebGPU genuinely unavailable
+pnpm qa:runtime --expect wasm
+```
+
+It runs in **~18s** and is deterministic: every check is local, so there is no
+network in the default path. Two checks are opt-in because they are slow or
+flaky, and both are already covered elsewhere:
+
+- `--watchdog` waits out the card's real deadline in-browser (~54s). The timing
+  rules themselves are covered deterministically by
+  `tests/unit/classify-watchdog.test.ts` with fake timers, so this only
+  re-confirms in a real browser what that test already proves.
+- `--site <url>` smokes a real site. It needs the network, which makes it both
+  the slowest step and the only genuinely flaky one — page weight and markup are
+  outside our control. The local `/hostile` fixture covers the same failure mode
+  deterministically. Run it before a release, not on every loop.
+
+**Keep it fast and deterministic.** Budgets are proportionate to measured times
+(1.2–1.8s warm on WebGPU, 2.4–3.0s on CPU/WASM), so a regression fails in
+seconds instead of hanging. Probe tabs all carry `?qa=…` and the fixture tab is
+matched on an empty query string — matching on pathname alone silently selected
+a probe tab and classified into it (rule 4, the hard way).
+
+**Do not trust a launch flag to disable WebGPU.** `--disable-features=WebGPU`
+does *not* work — `requestAdapter()` still resolves under it. `--disable-gpu`
+does, which is what `--no-webgpu` passes. `qa:runtime` never assumes: it reads
+`chrome://gpu`, probes `requestAdapter()` in the extension context, and asserts
+the provider the classifier actually chose matches what the browser can do.
 
 ## Agent-driven debugging
 
@@ -230,16 +273,12 @@ context-menu click
   A normal fallback is an informational event, not a warning. If both providers fail,
   retain both technical causes in diagnostics while showing an actionable browser,
   memory, or model-recovery message.
-- Manual runtime QA must cover a normal WebGPU run and a verified CPU/WASM run with
-  WebGPU genuinely unavailable (not merely assumed from a launch flag). `--disable-gpu`
-  is the flag that actually works — `--disable-features=WebGPU` does **not**
-  (`requestAdapter()` still resolves). Verify it two ways: `chrome://gpu` must report
-  `WebGPU: Disabled`, and the recorded `fallbackReason` must be the worker's own probe
-  result. Hold a card in `loading` past the 45s watchdog with `pnpm debug backlog`, not
-  with CPU throttling (rule 9), and verify concurrent tabs still share one serialized
-  session — `sessionCreations: 1` and `maxConcurrentRuns: 1` in the offscreen
-  diagnostics. An Apple Silicon run is useful evidence, not a claim that it reproduces
-  a particular Windows or Chromebook CPU.
+- Manual runtime QA must cover both providers, and is now one command per provider —
+  see "Runtime QA (execution providers)". Run it green on `--expect webgpu` and on
+  `--expect wasm` before claiming the fallback works. An Apple Silicon run is useful
+  evidence, not a claim that it reproduces a particular Windows or Chromebook CPU;
+  in particular inference here is far too fast to reach the 45s card watchdog, which
+  is why the watchdog is verified by driving the messages rather than by being slow.
 - A pre-v1 update writes `.slophammer-v1-migration.json` at the OPFS root,
   outside `slop-hammer/`, before storage/model deletion. The resumable phases are
   `pending → wiping → downloading → installing → ready`; `error` retains its reason.

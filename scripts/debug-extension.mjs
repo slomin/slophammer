@@ -62,10 +62,12 @@ const withTimeout = (p, ms, label) =>
     new Promise((_, rej) => setTimeout(() => rej(new Error(`TIMEOUT(${ms}ms): ${label}`)), ms)),
   ])
 
-const targets = async () =>
+export const targets = async () =>
   await (await withTimeout(fetch(`${CDP}/json/list`), 8000, 'json/list')).json()
 
-function open(target) {
+export { CDP, TEST_PAGE }
+
+export function open(target) {
   const ws = new WebSocket(target.webSocketDebuggerUrl)
   let id = 0
   const pend = new Map()
@@ -173,6 +175,47 @@ export async function getServiceWorker(tries = 25) {
 // on a URL substring can select text in one tab and dispatch the request to
 // another. Match on the exact href of the tab we actually attached to, and say
 // so when it is ambiguous.
+// Open a tab on any URL and return a session that is genuinely on that document.
+// Rule 5: /json/new resolves before the navigation commits. Rule 7: innerText is
+// empty in a tab that has never been rendered, so bring it to front.
+export async function openTab(url, { bringToFront = true } = {}) {
+  const created = await withTimeout(
+    fetch(`${CDP}/json/new?${url}`, { method: 'PUT' }),
+    15000,
+    'json/new',
+  )
+  const target = await created.json()
+  const page = open(target)
+  await page.ready
+  await page.send('Runtime.enable')
+  await page.send('Page.enable').catch(() => {})
+  for (let i = 0; i < 120; i++) {
+    const ok = await page
+      .eval(`location.href !== 'about:blank' && document.readyState === 'complete'`)
+      .catch(() => false)
+    if (ok) break
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  if (bringToFront) await page.send('Page.bringToFront').catch(() => {})
+  return page
+}
+
+export async function closeTab(page) {
+  await fetch(`${CDP}/json/close/${page.targetId}`).catch(() => {})
+  page.close()
+}
+
+// Select the first paragraph with enough words to pass the 40-word gate and
+// return its text, so the same check works on fixtures and on real sites.
+export async function selectLongParagraph(page, minWords = 45) {
+  return page.eval(`(()=>{
+    const ps=[...document.querySelectorAll('p')]
+      .filter(p=>(p.textContent||'').trim().split(/\\s+/).length>=${minWords})
+    if(!ps.length) return null
+    const r=document.createRange();r.selectNodeContents(ps[0])
+    const g=getSelection();g.removeAllRanges();g.addRange(r);return g.toString()})()`)
+}
+
 export async function tabIdForHref(sw, href) {
   const matches = await sw.eval(
     `(async()=>(await chrome.tabs.query({})).filter(t=>t.url===${JSON.stringify(href)}).map(t=>t.id))()`,
@@ -209,7 +252,7 @@ export async function waitForCard(page, ms = CLASSIFY_WAIT_MS) {
   while (Date.now() < deadline) {
     last = await page.eval(CARD_SNAPSHOT).catch(() => null)
     if (last?.state && last.state !== 'loading') return last
-    await new Promise((r) => setTimeout(r, 300))
+    await new Promise((r) => setTimeout(r, 100))
   }
   return { ...(last ?? {}), timedOut: true }
 }
@@ -301,7 +344,7 @@ async function cmdStatus() {
 
 // localhost and 127.0.0.1 are the same server but never the same string, so
 // match on host:port rather than on the configured URL verbatim.
-function isFixturePage(u) {
+export function isFixturePage(u) {
   try {
     const parsed = new URL(u)
     return (
@@ -542,7 +585,7 @@ async function cmdBacklog(args) {
   page.close()
 }
 
-async function offscreenDiagnostics() {
+export async function offscreenDiagnostics() {
   const off = await attach((x) => x.url.includes('offscreen.html'), 'offscreen')
   if (!off) return null
   try {

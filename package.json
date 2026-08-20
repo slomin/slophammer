@@ -21,7 +21,8 @@
     "setup:chrome": "node scripts/install-chrome-for-testing.mjs",
     "typecheck": "tsc --noEmit",
     "postinstall": "wxt prepare",
-    "debug": "node scripts/debug-extension.mjs"
+    "debug": "node scripts/debug-extension.mjs",
+    "qa:runtime": "node scripts/qa-runtime.mjs"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
