@@ -97,6 +97,11 @@ Content security policy:
 
 ## Store assets
 
+All images are 24-bit PNG without alpha (the dashboard rejects alpha).
+
+Store icon (uploaded separately from the packaged `icon/128.png`, which has transparent
+corners): `store-assets/chrome-web-store/store-icon-128x128.png`
+
 Screenshots, in upload order:
 
 1. `store-assets/chrome-web-store/screenshot-1-hero-1280x800.png`

@@ -12,8 +12,11 @@ captured from the built extension — real DOM, real styles, fed one fixed synth
 result so the numbers are stable — then each scene in `scripts/store-scenes.mjs`
 is rendered at its exact Store size with those captures embedded.
 
+All files are 24-bit PNG without alpha, which is what the dashboard accepts.
+
 | File | Size | Store slot |
 |---|---|---|
+| `store-icon-128x128.png` | 128x128 | Store icon (the packaged icon has alpha; this one is flattened on paper) |
 | `screenshot-1-hero-1280x800.png` | 1280x800 | Screenshot 1 |
 | `screenshot-2-advanced-1280x800.png` | 1280x800 | Screenshot 2 |
 | `screenshot-3-flow-1280x800.png` | 1280x800 | Screenshot 3 |

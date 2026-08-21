@@ -20,7 +20,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { SCENES } from './store-scenes.mjs'
+import { SCENES, PALETTE } from './store-scenes.mjs'
+import { buildIconSvg } from './generate-icons.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
@@ -289,6 +290,24 @@ async function captureProduct() {
   }
 }
 
+// The Store wants its own 128x128 icon upload as JPEG or 24-bit PNG with no
+// alpha — the packaged icon has transparent rounded corners, so it is
+// rejected as-is. Same artwork, 96x96 with 16px of paper around it, flattened.
+async function renderStoreIcon(dir) {
+  const file = path.join(dir, 'store-icon-128x128.png')
+  const art = await sharp(Buffer.from(buildIconSvg())).resize(96, 96).png().toBuffer()
+  await sharp({ create: { width: 128, height: 128, channels: 3, background: PALETTE.paper } })
+    .composite([{ input: art, left: 16, top: 16 }])
+    .flatten({ background: PALETTE.paper })
+    .removeAlpha()
+    .png({ compressionLevel: 9 })
+    .toFile(file)
+  const meta = await sharp(file).metadata()
+  const ok = meta.width === 128 && meta.height === 128 && meta.channels === 3 && !meta.hasAlpha
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${'store-icon-128x128'.padEnd(34)} ${meta.width}x${meta.height} channels=${meta.channels}`)
+  return ok ? [] : ['store-icon-128x128']
+}
+
 async function renderScenes(captures) {
   const browser = await chromium.launch({ headless: true, executablePath: chromeExecutablePath() })
   const problems = []
@@ -326,11 +345,12 @@ async function renderScenes(captures) {
       await page.close()
 
       const meta = await sharp(file).metadata()
-      const sized = meta.width === scene.width && meta.height === scene.height && !meta.hasAlpha
+      // The Store accepts JPEG or 24-bit PNG only: three channels, no alpha.
+      const sized = meta.width === scene.width && meta.height === scene.height && meta.channels === 3 && !meta.hasAlpha
       const whole = scene.allowBleed ? true : clipped.length === 0
       const ok = sized && whole
       console.log(
-        `${ok ? 'PASS' : 'FAIL'}  ${scene.name.padEnd(34)} ${meta.width}x${meta.height}${meta.hasAlpha ? ' (alpha!)' : ''}${whole ? '' : ` clipped capture: ${clipped.join(', ')}`}`,
+        `${ok ? 'PASS' : 'FAIL'}  ${scene.name.padEnd(34)} ${meta.width}x${meta.height} channels=${meta.channels}${meta.hasAlpha ? ' (alpha!)' : ''}${whole ? '' : ` clipped capture: ${clipped.join(', ')}`}`,
       )
       if (!ok) problems.push(scene.name)
     }
@@ -357,8 +377,11 @@ captured from the built extension — real DOM, real styles, fed one fixed synth
 result so the numbers are stable — then each scene in \`scripts/store-scenes.mjs\`
 is rendered at its exact Store size with those captures embedded.
 
+All files are 24-bit PNG without alpha, which is what the dashboard accepts.
+
 | File | Size | Store slot |
 |---|---|---|
+| \`store-icon-128x128.png\` | 128x128 | Store icon (the packaged icon has alpha; this one is flattened on paper) |
 | \`screenshot-1-hero-1280x800.png\` | 1280x800 | Screenshot 1 |
 | \`screenshot-2-advanced-1280x800.png\` | 1280x800 | Screenshot 2 |
 | \`screenshot-3-flow-1280x800.png\` | 1280x800 | Screenshot 3 |
@@ -392,7 +415,7 @@ async function main() {
   // must leave the committed set untouched.
   try {
     const captures = await captureProduct()
-    const problems = await renderScenes(captures)
+    const problems = [...(await renderScenes(captures)), ...(await renderStoreIcon(RENDER_DIR))]
     if (problems.length) {
       throw new Error(`assets that failed their check: ${problems.join(', ')} — ${OUT_DIR} left untouched`)
     }
