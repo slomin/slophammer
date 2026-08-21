@@ -1,86 +1,16 @@
-import { test, expect, gotoHtml } from './fixtures'
+import {
+  dispatchClassification,
+  expect,
+  gotoHtml,
+  serviceWorkerFor,
+  tabIdFor,
+  test,
+  CARD_HOST_SELECTOR,
+} from './fixtures'
 
 const LONG_TEXT =
   Array.from({ length: 40 }, (_, index) => `supported-word-${index + 1}`).join(' ')
-const CARD_HOST_SELECTOR = '[data-slop-hammer-card]'
 const HOSTILE_PAGE_HEAD = '<style>:not(:defined) { visibility: hidden; }</style>'
-
-// These specs cover the card's rendering, geometry and controls, so they drive
-// it with a synthetic result rather than running inference. The e2e profile has
-// no model installed; this used to reach 'ready' only because a missing model
-// silently fell back to a fake classifier that invented verdicts. Now that the
-// extension fails loudly instead (see #19), the card would sit in 'error'.
-const SYNTHETIC_RESULT = {
-  probs: [0.05, 0.1, 0.15, 0.7],
-  rawPct: [5, 10, 15, 70],
-  bucketLabels: ['Human', 'Lightly AI', 'Moderately AI', 'Fully AI'],
-  extLlr: 4.2,
-  threshold: 3.8088,
-  verdict: 'flagged',
-  tokenCount: 40,
-  analysedTokens: 40,
-  truncated: false,
-}
-
-async function serviceWorkerFor(context: import('@playwright/test').BrowserContext) {
-  return context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
-}
-
-async function tabIdFor(
-  context: import('@playwright/test').BrowserContext,
-  page: import('@playwright/test').Page,
-) {
-  const worker = await serviceWorkerFor(context)
-  const tabId = await worker.evaluate(async (pageUrl) => {
-    for (let i = 0; i < 20; i++) {
-      const tabs = await chrome.tabs.query({ url: pageUrl + '*' })
-      if (tabs[0]?.id != null) return tabs[0].id
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    return -1
-  }, page.url().split('?')[0])
-  expect(tabId, 'SW could not find the test page tab').toBeGreaterThan(0)
-  return tabId
-}
-
-async function dispatchClassification(
-  context: import('@playwright/test').BrowserContext,
-  page: import('@playwright/test').Page,
-  text: string,
-) {
-  const worker = await serviceWorkerFor(context)
-  const tabId = await tabIdFor(context, page)
-  const requestId = 'e2e-' + Date.now()
-
-  await worker.evaluate(
-    async ([tabId, requestId, text, result]) => {
-      const startedMsg = {
-        type: 'classify:started',
-        requestId: requestId as string,
-        preview: (text as string).slice(0, 200),
-        wordCount: (text as string).trim().split(/\s+/).length,
-        charCount: (text as string).length,
-      }
-      for (let i = 0; i < 50; i++) {
-        try {
-          await chrome.tabs.sendMessage(tabId as number, startedMsg)
-          break
-        } catch {
-          await new Promise((r) => setTimeout(r, 100))
-        }
-      }
-      await chrome.tabs.sendMessage(tabId as number, {
-        type: 'classify:result',
-        requestId: requestId as string,
-        tabId: tabId as number,
-        result,
-      })
-    },
-    [tabId, requestId, text, SYNTHETIC_RESULT] as const,
-  )
-
-  return page.locator(CARD_HOST_SELECTOR)
-}
 
 test('content script renders result card on classify dispatch', async ({ context }) => {
   const page = await context.newPage()

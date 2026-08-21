@@ -1,18 +1,27 @@
 #!/usr/bin/env node
-// Placement QA for the result card (issue #37).
+// Placement QA for the result card (issue #37), against the real extension with
+// real inference. The same torture page is asserted without a model by
+// tests/e2e/card-placement.spec.ts; this is the evidence run for a PR, with
+// the card at its real size on the real pipeline.
 //
 //   pnpm qa            # bring up Chrome for Testing + the test page
 //   pnpm qa:placement  # measure where the card actually lands
 //
-// Two measurements, because the card fails in two different ways:
+// Three measurements, because the card fails in three different ways:
 //
-//   cases     — one row per torture fixture at /placement, plus a scroll test.
-//               Reports the gap between the card and the text it describes, and
-//               whether the card is the top-most element at its own centre.
+//   cases     — one row per torture fixture at /placement. Reports where the
+//               card sat relative to the text, and whether it is what the user
+//               would see there: a hit test for most rows, a screenshot pixel
+//               for the modal dialog, because a modal makes every node outside
+//               it inert and no overlay can be hit-tested above one.
+//   scroll    — the card must move with its text, hide when the text leaves
+//               the viewport, and come back with it.
 //   geometry  — the same selection placed at four heights in the viewport,
-//               which is what exposes the dead band: with a card 501px tall in
-//               a 941px viewport, a selection in the middle fits neither above
-//               nor below and the card is clamped to the viewport's top edge.
+//               which is what exposes the dead band: a selection that fits
+//               neither above nor below must pin, never clamp.
+//
+// Every check prints PASS/FAIL with the numbers it used and the process exits
+// non-zero if any failed.
 //
 // Flags:
 //   --cases      run only the per-fixture table
@@ -21,6 +30,7 @@
 // Reuses the test-page server rather than starting its own, and exits
 // explicitly: debug-extension.mjs leaves CDP websockets open, so without that
 // the process never exits and a finished run looks like a hang.
+import sharp from 'sharp'
 import {
   CDP,
   TEST_PAGE,
@@ -42,16 +52,37 @@ const only = argv.includes('--cases') ? 'cases' : argv.includes('--geometry') ? 
 const PLACEMENT_URL = new URL('/placement', TEST_PAGE).href
 const TEXT =
   'The quick brown fox jumps over the lazy dog while the committee deliberates at length about matters of no consequence whatsoever, producing minutes that nobody reads and decisions that nobody implements, which is roughly how these things tend to go in practice and has been for years.'
+const GAP = 8
+const MARGIN = 8
+const TOLERANCE = 1.5
+// .sh-card.dark / .sh-card.light --sh-bg; which one applies depends on the
+// profile's theme setting, so either counts as "painted".
+const CARD_BG = {
+  dark: [15, 15, 17],
+  light: [250, 250, 247],
+}
 
-/** Select an element's contents and report the resulting rect. */
+const results = []
+const record = (name, ok, detail) => {
+  results.push({ name, ok, detail })
+  say(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(24)} ${detail}`)
+}
+
+/**
+ * Select an element's contents and report the resulting rect. The selection
+ * is scrolled to sit near the top of the viewport so an adjacent placement is
+ * possible; a centred selection with the advanced card in a short window pins
+ * every row, which is correct but says nothing about the ancestor cases.
+ */
 const selectContents = (expr) => `(() => {
   const el = ${expr}
   el.scrollIntoView({block:'center'})
+  window.scrollBy(0, el.getBoundingClientRect().bottom - innerHeight * 0.15)
   const r = document.createRange(); r.selectNodeContents(el)
   const s = getSelection(); s.removeAllRanges(); s.addRange(r)
   const rect = r.getBoundingClientRect()
-  return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom)},
-          ranges:getSelection().rangeCount, len:getSelection().toString().length}
+  return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom),right:Math.round(rect.right)},
+          viewport:{w:innerWidth,h:innerHeight}, ranges:getSelection().rangeCount, len:getSelection().toString().length}
 })()`
 
 const READ_CARD = `(() => {
@@ -59,8 +90,56 @@ const READ_CARD = `(() => {
   if (!h) return null
   const root = h.shadowRoot.querySelector('[data-testid="card-root"]')
   const r = root.getBoundingClientRect()
-  return {top:Math.round(r.top), left:Math.round(r.left), h:Math.round(r.height), bottom:Math.round(r.bottom)}
+  const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+  return {placement: root.dataset.placement ?? null, hidden: root.dataset.hidden === 'true',
+          visibility: getComputedStyle(root).visibility, inTopLayer: h.matches(':popover-open'),
+          top: r.top, left: r.left, bottom: r.bottom, right: r.right, h: r.height, w: r.width,
+          hitIsCard: hit === h, viewport: {w: innerWidth, h: innerHeight}}
 })()`
+
+const READ_SELECTION = `(() => {
+  const s = getSelection(); if (!s || s.rangeCount === 0) return null
+  const r = s.getRangeAt(0).getBoundingClientRect()
+  return {top: r.top, bottom: r.bottom, left: r.left, right: r.right}
+})()`
+
+const near = (a, b) => Math.abs(a - b) <= TOLERANCE
+
+// What "adjacent or pinned" means in pixels; a reason when it does not hold.
+function placementProblem(card, sel, vp) {
+  if (card.top < -TOLERANCE || card.bottom > vp.h + TOLERANCE) {
+    return `card leaves the viewport (${Math.round(card.top)}..${Math.round(card.bottom)} of ${vp.h})`
+  }
+  switch (card.placement) {
+    case 'below':
+      return sel && near(card.top, sel.bottom + GAP) ? null : `below but gap is ${Math.round(card.top - (sel?.bottom ?? 0))}`
+    case 'above':
+      return sel && near(card.bottom, sel.top - GAP) ? null : `above but gap is ${Math.round((sel?.top ?? 0) - card.bottom)}`
+    case 'beside':
+      return sel && (near(card.left, sel.right + GAP) || near(card.right, sel.left - GAP)) ? null : 'beside but not touching the text'
+    case 'pinned':
+      return near(card.bottom, vp.h - MARGIN) && near(card.right, vp.w - MARGIN)
+        ? null
+        : `pinned but at ${Math.round(card.right)}x${Math.round(card.bottom)} of ${vp.w}x${vp.h}`
+    default:
+      return `unexpected placement ${card.placement}`
+  }
+}
+
+// One CSS pixel inside the card's left padding at mid height — away from the
+// rounded corners, which show whatever is behind them.
+async function paintedPixel(page, card) {
+  const { data } = await page.send(
+    'Page.captureScreenshot',
+    { format: 'png', clip: { x: card.left + 6, y: card.top + card.h / 2, width: 1, height: 1, scale: 1 } },
+    8000,
+  )
+  const { data: raw } = await sharp(Buffer.from(data, 'base64')).raw().toBuffer({ resolveWithObject: true })
+  return [raw[0], raw[1], raw[2]]
+}
+
+const isCardBackground = (px) =>
+  Object.values(CARD_BG).some((bg) => bg.every((channel, i) => Math.abs(channel - px[i]) <= 8))
 
 const CASES = [
   ['plain', selectContents(`document.querySelector('#c-plain .t')`)],
@@ -80,15 +159,16 @@ const CASES = [
     const r=document.createRange(); r.setStart(a.firstChild,0); r.setEnd(b.firstChild,b.firstChild.length)
     const s=getSelection(); s.removeAllRanges(); s.addRange(r)
     const rect=r.getBoundingClientRect()
-    return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom)}, ranges:1, len:s.toString().length}
+    return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom),right:Math.round(rect.right)}, viewport:{w:innerWidth,h:innerHeight}, ranges:1, len:s.toString().length}
   })()`,
   ],
+  // No document Range for either of these, so the card has no anchor and pins.
   [
     'textarea',
     `(() => {
     const ta=document.getElementById('ta'); ta.scrollIntoView({block:'center'}); ta.focus(); ta.setSelectionRange(0, ta.value.length)
     const rect=ta.getBoundingClientRect(); const s=getSelection()
-    return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom)}, ranges:s.rangeCount, len:s.toString().length}
+    return {sel:{top:Math.round(rect.top),left:Math.round(rect.left),bottom:Math.round(rect.bottom),right:Math.round(rect.right)}, viewport:{w:innerWidth,h:innerHeight}, ranges:s.rangeCount, len:s.toString().length}
   })()`,
   ],
   [
@@ -98,37 +178,21 @@ const CASES = [
     const d=f.contentDocument, el=d.querySelector('.t')
     const r=d.createRange(); r.selectNodeContents(el)
     const s=f.contentWindow.getSelection(); s.removeAllRanges(); s.addRange(r)
+    getSelection().removeAllRanges()
     const er=el.getBoundingClientRect(), fr=f.getBoundingClientRect()
-    return {sel:{top:Math.round(fr.top+er.top),left:Math.round(fr.left+er.left),bottom:Math.round(fr.top+er.bottom)}, ranges:getSelection().rangeCount, len:getSelection().toString().length}
+    return {sel:{top:Math.round(fr.top+er.top),left:Math.round(fr.left+er.left),bottom:Math.round(fr.top+er.bottom),right:Math.round(fr.left+er.right)}, viewport:{w:innerWidth,h:innerHeight}, ranges:getSelection().rangeCount, len:getSelection().toString().length}
   })()`,
   ],
+  // Painted-above is checked with a pixel, not a hit test: everything outside
+  // a modal dialog is inert, by specification.
   [
     'modal <dialog>',
     `document.getElementById('dlg').showModal(); ` + selectContents(`document.querySelector('#dlg .t')`),
   ],
-  // INCONCLUSIVE as written. A non-modal popover has no backdrop and this one
-  // does not overlap where the card lands, so `visible=true` here is not
-  // evidence that the top layer is survivable. Only the modal dialog is.
+  // The fixture popover is large enough that the card placed under its text
+  // lands inside it, so the hit test is evidence here.
   ['popover', `document.getElementById('pop').showPopover(); ` + selectContents(`document.querySelector('#pop .t')`)],
 ]
-
-/** Scroll so the target paragraph's bottom sits at `fraction` of the viewport. */
-const placeAt = (fraction) => `(() => {
-  const el = document.querySelector('#c-plain .t')
-  el.scrollIntoView({block:'center'})
-  const r0 = el.getBoundingClientRect()
-  window.scrollBy(0, r0.bottom - innerHeight * ${fraction})
-  const r = document.createRange(); r.selectNodeContents(el)
-  const s = getSelection(); s.removeAllRanges(); s.addRange(r)
-  const rect = r.getBoundingClientRect()
-  return {viewport:{h:innerHeight,w:innerWidth}, sel:{top:Math.round(rect.top),bottom:Math.round(rect.bottom)}}
-})()`
-
-async function classifyAndRead(page, sw, tabId, id) {
-  await dispatchClassify(sw, tabId, TEXT, id)
-  await waitForCard(page, 40000)
-  return page.eval(READ_CARD, 5000)
-}
 
 async function dismiss(page) {
   await page.eval(
@@ -139,49 +203,83 @@ async function dismiss(page) {
   await new Promise((r) => setTimeout(r, 400))
 }
 
+async function classifyAndRead(page, sw, tabId, id) {
+  await dispatchClassify(sw, tabId, TEXT, id)
+  const card = await waitForCard(page, 40000)
+  if (card.crashed || card.timedOut) throw new Error(`${id}: no card (${card.crashed ? 'renderer crashed' : 'timed out'})`)
+  // Two frames: the ResizeObserver sees the loading→ready size change, then
+  // places.
+  await page.eval(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`, 4000)
+  return page.eval(READ_CARD, 5000)
+}
+
 async function runCases(page, sw, tabId) {
   say('')
-  say('case                    selBot  cardTop    gap  selLeft cardLeft     dx  visible onScreen  selection')
-  say('-'.repeat(104))
+  say('case                    placement  selBot  cardTop    gap  cardLeft  topLayer  painted')
+  say('-'.repeat(96))
   for (const [label, expr] of CASES) {
     const info = await page.eval(expr, 6000)
     if (!info || info.__error) {
-      say(`${label.padEnd(23)} SELECT FAILED: ${info?.__error}`)
+      record(label, false, `SELECT FAILED: ${info?.__error}`)
       continue
     }
-    await dispatchClassify(sw, tabId, TEXT, 'placement-' + label.replace(/\W+/g, '-'))
-    const card = await waitForCard(page, 40000)
-    const gap = card?.rect ? card.rect.top - info.sel.bottom : null
-    const dx = card?.rect ? card.rect.left - info.sel.left : null
+    const card = await classifyAndRead(page, sw, tabId, 'placement-' + label.replace(/\W+/g, '-'))
+    const sel = await page.eval(READ_SELECTION, 4000)
+    const painted = label === 'modal <dialog>' ? isCardBackground(await paintedPixel(page, card)) : card.hitIsCard
+    const gap = Math.round(card.top - info.sel.bottom)
+    const problem = placementProblem(card, sel, card.viewport)
     say(
-      `${label.padEnd(23)} ${String(info.sel.bottom).padStart(6)} ${String(card?.rect?.top ?? '-').padStart(8)} ` +
-        `${String(gap ?? '-').padStart(6)} ${String(info.sel.left).padStart(8)} ${String(card?.rect?.left ?? '-').padStart(8)} ` +
-        `${String(dx ?? '-').padStart(6)}  ${String(card?.visibleToUser).padEnd(7)} ${String(card?.onScreen).padEnd(8)}  ranges=${info.ranges} chars=${info.len}`,
+      `${label.padEnd(23)} ${String(card.placement).padEnd(9)} ${String(info.sel.bottom).padStart(6)} ${String(Math.round(card.top)).padStart(8)} ` +
+        `${String(gap).padStart(6)} ${String(Math.round(card.left)).padStart(9)}  ${String(card.inTopLayer).padEnd(8)}  ${painted}`,
     )
+    record(label, !problem && painted, problem ?? (painted ? card.placement : 'not painted where the user would see it'))
     await dismiss(page)
   }
+}
 
-  // Does the card follow the text when the page scrolls?
+/** Scroll so the target paragraph's bottom sits at `fraction` of the viewport. */
+const placeAt = (fraction) => `(() => {
+  const el = document.querySelector('#c-plain .t')
+  el.scrollIntoView({block:'center'})
+  const r0 = el.getBoundingClientRect()
+  window.scrollBy(0, r0.bottom - innerHeight * ${fraction})
+  const r = document.createRange(); r.selectNodeContents(el)
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r)
+  const rect = r.getBoundingClientRect()
+  return {viewport:{w:innerWidth,h:innerHeight}, sel:{top:Math.round(rect.top),bottom:Math.round(rect.bottom),left:Math.round(rect.left),right:Math.round(rect.right)}}
+})()`
+
+async function scrollBy(page, px) {
+  await page.eval(`window.scrollBy(0, ${px})`, 4000)
+  await page.eval(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`, 4000)
+  return { sel: await page.eval(READ_SELECTION, 4000), card: await page.eval(READ_CARD, 4000) }
+}
+
+async function runScroll(page, sw, tabId) {
   say('')
-  await page.eval(selectContents(`document.querySelector('#c-plain .t')`), 6000)
+  say('scroll — a card placed below text near the top of the viewport')
+  const info = await page.eval(placeAt(0.15), 6000)
   const before = await classifyAndRead(page, sw, tabId, 'placement-scroll')
-  const readSel = `(()=>{const r=getSelection().getRangeAt(0).getBoundingClientRect();return{bottom:Math.round(r.bottom)}})()`
-  const selBefore = await page.eval(readSel, 4000)
-  await page.eval(`window.scrollBy(0, 400)`, 4000)
-  await new Promise((r) => setTimeout(r, 700))
-  const selAfter = await page.eval(readSel, 4000)
-  const cardAfter = await page.eval(READ_CARD, 4000)
-  say('scroll test — page scrolled 400px after the card was placed')
-  say(`  selection bottom : ${selBefore.bottom} -> ${selAfter.bottom}   (moved ${selAfter.bottom - selBefore.bottom}px)`)
-  say(`  card top         : ${before.top} -> ${cardAfter.top}   (moved ${cardAfter.top - before.top}px)`)
-  say(`  gap to selection : ${before.top - selBefore.bottom} -> ${cardAfter.top - selAfter.bottom}`)
+  const selBefore = await page.eval(READ_SELECTION, 4000)
+  record('scroll: starts below', before.placement === 'below', `placement=${before.placement} gap=${Math.round(before.top - selBefore.bottom)}`)
+
+  const moved = await scrollBy(page, 100)
+  const dSel = moved.sel.bottom - selBefore.bottom
+  const dCard = moved.card.top - before.top
+  record('scroll: follows', near(dSel, dCard) && !placementProblem(moved.card, moved.sel, moved.card.viewport), `selection moved ${Math.round(dSel)}px, card moved ${Math.round(dCard)}px`)
+
+  const gone = await scrollBy(page, info.viewport.h)
+  record('scroll: hides off-screen', gone.sel.bottom < 0 && gone.card.hidden && gone.card.visibility === 'hidden', `selection bottom ${Math.round(gone.sel.bottom)}, hidden=${gone.card.hidden}`)
+
+  const back = await scrollBy(page, -(info.viewport.h + 100))
+  record('scroll: returns', !back.card.hidden && !placementProblem(back.card, back.sel, back.card.viewport), `placement=${back.card.placement} gap=${Math.round(back.card.top - back.sel.bottom)}`)
   await dismiss(page)
 }
 
 async function runGeometry(page, sw, tabId) {
   say('')
   say('selection sits at   viewport  selTop selBot  cardTop cardH cardBot    gap  placement')
-  say('-'.repeat(100))
+  say('-'.repeat(96))
   for (const [label, fraction] of [
     ['15% (near top)', 0.15],
     ['35%', 0.35],
@@ -190,15 +288,14 @@ async function runGeometry(page, sw, tabId) {
   ]) {
     const info = await page.eval(placeAt(fraction), 6000)
     const c = await classifyAndRead(page, sw, tabId, 'geometry-' + fraction)
-    const gap = c.top - info.sel.bottom
-    const fitsBelow = info.sel.bottom + 8 + c.h + 8 <= info.viewport.h
-    const fitsAbove = info.sel.top - c.h - 8 >= 8
-    const placement = gap > 0 ? 'BELOW text' : c.top === 8 ? 'CLAMPED to viewport top' : 'above text'
+    const sel = await page.eval(READ_SELECTION, 4000)
+    const gap = Math.round(c.top - info.sel.bottom)
     say(
       `${label.padEnd(19)} ${String(info.viewport.h).padStart(8)} ${String(info.sel.top).padStart(7)} ${String(info.sel.bottom).padStart(6)} ` +
-        `${String(c.top).padStart(8)} ${String(c.h).padStart(5)} ${String(c.bottom).padStart(7)} ${String(gap).padStart(6)}  ${placement}` +
-        `   (fitsBelow=${fitsBelow} fitsAbove=${fitsAbove})`,
+        `${String(Math.round(c.top)).padStart(8)} ${String(Math.round(c.h)).padStart(5)} ${String(Math.round(c.bottom)).padStart(7)} ${String(gap).padStart(6)}  ${c.placement}`,
     )
+    const problem = placementProblem(c, sel, c.viewport)
+    record(`geometry ${label}`, !problem, problem ?? c.placement)
     await dismiss(page)
   }
 }
@@ -218,6 +315,8 @@ try {
 
   const page = await openTab(PLACEMENT_URL)
   await new Promise((r) => setTimeout(r, 1500))
+  await page.send('Page.enable').catch(() => {})
+  await page.send('Page.bringToFront').catch(() => {})
   const sw = await getServiceWorker()
 
   const open = (await targets()).filter((t) => t.type === 'page' && t.url.startsWith(PLACEMENT_URL))
@@ -226,7 +325,10 @@ try {
   }
   const tabId = await tabIdForHref(sw, PLACEMENT_URL)
 
-  if (only !== 'geometry') await runCases(page, sw, tabId)
+  if (only !== 'geometry') {
+    await runCases(page, sw, tabId)
+    await runScroll(page, sw, tabId)
+  }
   if (only !== 'cases') await runGeometry(page, sw, tabId)
 
   await closeTab(page)
@@ -235,7 +337,11 @@ try {
   console.error('PLACEMENT QA FAILED:', error?.stack ?? error)
 }
 
-say(`\nPLACEMENT QA COMPLETE exit=${failure ? 1 : 0}`)
+const failed = results.filter((r) => !r.ok)
+say('')
+say(`${results.length - failed.length}/${results.length} checks passed`)
+const exitCode = failure || failed.length ? 1 : 0
+say(`PLACEMENT QA COMPLETE exit=${exitCode}`)
 // CDP websockets stay open; without this the process never exits and a finished
 // run looks like a hang.
-process.exit(failure ? 1 : 0)
+process.exit(exitCode)
