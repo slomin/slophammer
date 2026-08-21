@@ -372,12 +372,14 @@ context-menu click
   card sat at the top edge 500px from its text; the band scales with card and
   window height and sits where people read. Fix (#37): `placeCard` tries
   below → above → beside-right → beside-left and, when nothing fits, a *new*
-  card pins to the corner and stays there until the next classification. A
-  card being tracked through a scroll shifts into view instead, so it never
-  jumps to the corner mid-scroll. The card follows a live `Range` on scroll
-  and resize and hides while the text is fully off screen — there was no
-  scroll listener before, and the ResizeObserver repositioned against a stale
-  rect. `pnpm qa:placement` and `tests/e2e/card-placement.spec.ts` gate it.
+  card pins to the corner and stays there until the next classification — a
+  new card whose text has already scrolled off screen pins too, so a result
+  is never a hidden result. A card being tracked through a scroll shifts into
+  view instead, so it never jumps to the corner mid-scroll, and hides while
+  its text is fully off screen. There was no scroll listener before, and the
+  ResizeObserver repositioned against a stale rect. Note for harnesses: a
+  selection made programmatically off screen now yields a pinned card, which
+  is what `qa:runtime`'s scrolled hostile check sees. `pnpm qa:placement` and `tests/e2e/card-placement.spec.ts` gate it.
 - **`z-index: 2147483647` loses to the top layer.** A page's modal `<dialog>`,
   `[popover]` or fullscreen element painted over the card. Fix (#37): the host
   is a `popover="manual"` shown with `showPopover()`, which puts it in the top

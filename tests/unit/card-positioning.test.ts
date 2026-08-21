@@ -86,28 +86,35 @@ describe('placeCard — when nothing adjacent fits', () => {
 })
 
 describe('placeCard — anchor outside the viewport', () => {
-  it('hides when the selection is entirely above the viewport', () => {
-    expect(place({ selection: { top: -100, bottom: -20, left: 200, right: 500 } })).toEqual({ placement: 'hidden' })
+  const above = { top: -100, bottom: -20, left: 200, right: 500 }
+  const below = { top: 800, bottom: 850, left: 200, right: 500 }
+  const leftOf = { top: 100, bottom: 140, left: -300, right: -10 }
+  const rightOf = { top: 100, bottom: 140, left: 1100, right: 1300 }
+  const pinned = {
+    placement: 'pinned',
+    top: viewport.height - card.height - CARD_MARGIN,
+    left: viewport.width - card.width - CARD_MARGIN,
+  }
+
+  // A result that lands after the reader scrolled away must not be a hidden
+  // result: a new card with its text off screen pins.
+  it('pins a new card whose text is off screen, in any direction', () => {
+    for (const selection of [above, below, leftOf, rightOf]) {
+      expect(place({ selection, lastResort: 'pinned' })).toEqual(pinned)
+    }
   })
 
-  it('hides when the selection is entirely below the viewport', () => {
-    expect(place({ selection: { top: 800, bottom: 850, left: 200, right: 500 } })).toEqual({ placement: 'hidden' })
-  })
-
-  it('hides when the selection is entirely left or right of the viewport', () => {
-    expect(place({ selection: { top: 100, bottom: 140, left: -300, right: -10 } })).toEqual({ placement: 'hidden' })
-    expect(place({ selection: { top: 100, bottom: 140, left: 1100, right: 1300 } })).toEqual({ placement: 'hidden' })
-  })
-
-  it('hides regardless of the last resort', () => {
-    expect(place({ selection: { top: -100, bottom: -20, left: 200, right: 500 }, lastResort: 'shift' })).toEqual({
-      placement: 'hidden',
-    })
+  // A card that was adjacent and is being tracked through a scroll hides
+  // while its text is away, and comes back with it.
+  it('hides a tracked card whose text is off screen, in any direction', () => {
+    for (const selection of [above, below, leftOf, rightOf]) {
+      expect(place({ selection, lastResort: 'shift' })).toEqual({ placement: 'hidden' })
+    }
   })
 
   it('still places while any part of the selection is visible', () => {
-    const pos = place({ selection: { top: -30, bottom: 10, left: 200, right: 500 } })
-    expect(pos.placement).toBe('below')
+    expect(place({ selection: { top: -30, bottom: 10, left: 200, right: 500 }, lastResort: 'shift' }).placement).toBe('below')
+    expect(place({ selection: { top: -30, bottom: 10, left: 200, right: 500 }, lastResort: 'pinned' }).placement).toBe('below')
   })
 })
 

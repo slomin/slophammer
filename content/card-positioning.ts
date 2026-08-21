@@ -89,8 +89,9 @@ export function correctedOffsets(args: {
 //              scroll is shifted into the viewport instead, so it stays with
 //              its text rather than jumping to the corner mid-scroll.
 //
-// A selection entirely outside the viewport yields `hidden` whatever the last
-// resort: the card has nothing to sit next to until the text comes back.
+// A selection entirely outside the viewport is the extreme case of nothing
+// fitting: a new card pins, so a result that arrives after the reader scrolled
+// away is never a hidden result; a tracked card hides until its text returns.
 export function placeCard(args: {
   selection: SelectionRect
   viewport: ViewportSize
@@ -104,7 +105,9 @@ export function placeCard(args: {
     selection.top < viewport.height &&
     selection.right > 0 &&
     selection.left < viewport.width
-  if (!anchorVisible) return { placement: 'hidden' }
+  if (!anchorVisible) {
+    return lastResort === 'pinned' ? pinnedCardPosition({ viewport, card }) : { placement: 'hidden' }
+  }
 
   const maxTop = Math.max(CARD_MARGIN, viewport.height - card.height - CARD_MARGIN)
   const maxLeft = Math.max(CARD_MARGIN, viewport.width - card.width - CARD_MARGIN)
