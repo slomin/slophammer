@@ -16,21 +16,22 @@ tag, by the follow-up documented in `WORKFLOW.md` → Release.
   verifies the SHA-256 before writing a file.
 - Runtime: local WebGPU, automatic local CPU/WASM fallback. No remote code.
 
-## Automated checks — branch at `a5f07c8`
+## Automated checks — branch at `8816e57`
 
 Product code on the branch is identical to `main` at `1286540`; the branch's own
-commits add only the store-asset pipeline, the upgrade rehearsal and documentation.
-`pnpm qa:upgrade` ran at `e28e34d`.
+commits add only the store-asset pipeline, the upgrade rehearsal, tests and
+documentation. The gates below were re-run after the review round, on the last
+code commit; the commit that records them changes this document only.
 
 | Check | Result |
 |---|---|
 | `pnpm icons` | regenerated `public/icon/*.png`, no diff against the tree |
-| `SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test` | 62 files, **544 tests passed**; the tokenizer vectors ran as a hard gate (vocabulary present) |
+| `SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test` | 63 files, **554 tests passed**; the tokenizer vectors ran as a hard gate (vocabulary present) |
 | `pnpm typecheck` | clean |
 | `pnpm build` | `.output/chrome-mv3` 27.50 MB, 19 files |
 | `pnpm check:package` | PASS — one ONNX Runtime WASM binary (`ort/ort-wasm-simd-threaded.asyncify.wasm`, 27.19 MB), runtime files present, JavaScript 232.99 kB under budget |
-| `pnpm test:e2e` | **14 passed** (25.8 s): `content-script-card.spec.ts` 7, `card-placement.spec.ts` 7 |
-| `pnpm store:assets` | 7 assets rendered, every one at its Store size (PASS rows below) |
+| `pnpm test:e2e` | **14 passed** (28.4 s): `content-script-card.spec.ts` 7, `card-placement.spec.ts` 7 |
+| `pnpm store:assets` | 7 assets rendered, every one at its Store size with its embedded capture shown whole (PASS rows below) |
 
 ## Runtime QA — real extension, real model, Chrome for Testing 147.0.7727.57
 
@@ -63,25 +64,26 @@ Chrome for Testing profile; the retired `Slomin/slop_hammer_0_8_b` model install
 through the 0.3.0 options page (sentinel `Slomin/slop_hammer_0_8_b`, 8 OPFS files,
 storage `checkpoint_id`, `model_installed`, a marker key and dark/advanced settings).
 
-Upgrade in place (files swapped, extension reloaded from `chrome://extensions`,
-`onInstalled` reason `update`, previous version `0.3.0`):
+Upgrade in place (files swapped under the running browser, extension reloaded
+from `chrome://extensions`):
 
 | Assertion | Observed |
 |---|---|
-| phases | `pending → downloading → installing → ready` in 18.8 s (the `wiping` write is faster than the 500 ms poll; the journal's `destructive: true` is its evidence) |
-| intent | `{ previousVersion: "0.3.0", targetVersion: "1.0.0" }` persisted |
+| `onInstalled` | `{ reason: "update", previousVersion: "0.3.0" }`, read from the worker's retained log object over CDP. (The persisted intent key is consumed by the wipe; on this run it was already gone when first polled, which is why the gate reads Chrome's event rather than racing storage.) |
+| phases | `downloading → installing → ready` observed, `ready` in under 20 s; `pending` and `wiping` are written faster than the 500 ms poll and the journal's `destructive: true` is their evidence |
 | journal | `phase=ready destructive=true artifact=slophammer_350m_v0_1.zip` |
-| legacy storage | marker and legacy settings gone; `checkpoint_id` now `SlopHammer 350M v0.1` |
+| legacy storage | marker key gone, neither planted setting (`theme: dark`, `resultDetail: advanced`) survived, `checkpoint_id` now `SlopHammer 350M v0.1` |
 | data generation | `slophammer-data-generation = 1` |
 | sentinel | `checkpointId=SlopHammer 350M v0.1`, `hosted.filename=slophammer_350m_v0_1.zip`, OID `3d4f3901…d4e` |
-| retired files | 9 OPFS entries, 0 matching the retired model |
-| classification after upgrade | card `ready`, verdict AI, 1.8 s |
+| retired model gone | by content, since both models use the same file names: the contract file in OPFS declares `SlopHammer 350M v0.1`, neither weight file keeps the byte size it had in the legacy profile, total OPFS bytes **751,662,777 → 239,593,209** |
+| classification after upgrade | card `ready`, verdict AI, 1.3 s |
 
 Interruption (legacy snapshot restored, upgraded the same way, Chrome SIGKILLed at
-`downloading 5 %`, relaunched): first phase observed after restart `downloading`,
-then `installing → ready` in 8.8 s; the same eight assertions hold (intent, journal
-`destructive: true`, legacy storage cleared, generation 1, 350M sentinel, no retired
-files). The retired model was not revived at any point.
+the first `downloading` observation, relaunched): first phase observed after restart
+`downloading`, then `installing → ready`; the same eight assertions hold (the
+`onInstalled` read before the kill, journal `destructive: true`, legacy storage
+cleared, generation 1, 350M sentinel, retired model gone by content). The retired
+model was not revived at any point.
 
 Harness note (recorded in `WORKFLOW.md`): relaunching with `--load-extension` after
 swapping the files reports `onInstalled` as a fresh `install` with no
@@ -108,7 +110,12 @@ built from the tag (see the submission record).
 ## Store assets — `pnpm store:assets`
 
 Captured from the built extension and composed into scenes
-(`scripts/store-scenes.mjs`); every visible product name is `SlopHammer`.
+(`scripts/store-scenes.mjs`); every visible product name is `SlopHammer`
+(`tests/unit/store-scenes.test.ts`, `branding.test.ts`). The verdict on the card is
+a fixture; the analysis time it shows (1.42 s) is the fixture's dispatch delay, set to
+what a warm WebGPU run measures, so the listing does not advertise a sub-0.1 s
+inference. The options capture ends on the Card position group boundary and the
+render fails if any embedded capture is clipped.
 
 | File | Size | Slot |
 |---|---|---|

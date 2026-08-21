@@ -509,7 +509,8 @@ A release is two PRs around one tag, so the evidence and the artifact stay hones
 about which commit each describes:
 
 1. **Prepare** (`chore/<issue>-release-<version>`): regenerate store assets, run every
-   gate from the branch tip — `pnpm icons` (no diff), `SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test`,
+   gate from the last code commit on the branch (the evidence commit on top may change
+   only the document that records them) — `pnpm icons` (no diff), `SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test`,
    `pnpm typecheck`, `pnpm build`, `pnpm check:package`, `pnpm test:e2e`, then with CfT up
    `pnpm qa:runtime --expect webgpu --record …`, `pnpm qa --no-webgpu && pnpm qa:runtime
    --expect wasm --compare …`, `pnpm qa:placement`, `pnpm qa:upgrade`, a real site via
