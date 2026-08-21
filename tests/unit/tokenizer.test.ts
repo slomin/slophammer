@@ -1,0 +1,190 @@
+import { describe, expect, it } from 'vitest'
+import { createTokenizer, resolveSpecialToken } from '@/llm/tokenizer'
+
+/**
+ * A hand-built WordPiece tokenizer. Small enough to read, big enough to prove
+ * the parts that matter: added tokens, a template post-processor that inserts
+ * [CLS]/[SEP], subword continuation, and an unknown token.
+ */
+const added = (id: number, content: string) => ({
+  id,
+  content,
+  single_word: false,
+  lstrip: false,
+  rstrip: false,
+  normalized: false,
+  special: true,
+})
+
+const TOKENIZER_JSON = {
+  version: '1.0',
+  truncation: null,
+  padding: null,
+  added_tokens: [
+    added(0, '[PAD]'),
+    added(1, '[CLS]'),
+    added(2, '[SEP]'),
+    added(3, '[UNK]'),
+    added(4, '[EOS]'),
+  ],
+  normalizer: null,
+  pre_tokenizer: { type: 'WhitespaceSplit' },
+  post_processor: {
+    type: 'TemplateProcessing',
+    single: [
+      { SpecialToken: { id: '[CLS]', type_id: 0 } },
+      { Sequence: { id: 'A', type_id: 0 } },
+      { SpecialToken: { id: '[SEP]', type_id: 0 } },
+    ],
+    pair: [
+      { Sequence: { id: 'A', type_id: 0 } },
+      { Sequence: { id: 'B', type_id: 1 } },
+    ],
+    special_tokens: {
+      '[CLS]': { id: '[CLS]', ids: [1], tokens: ['[CLS]'] },
+      '[SEP]': { id: '[SEP]', ids: [2], tokens: ['[SEP]'] },
+    },
+  },
+  decoder: null,
+  model: {
+    type: 'WordPiece',
+    unk_token: '[UNK]',
+    continuing_subword_prefix: '##',
+    max_input_chars_per_word: 100,
+    vocab: {
+      '[PAD]': 0,
+      '[CLS]': 1,
+      '[SEP]': 2,
+      '[UNK]': 3,
+      '[EOS]': 4,
+      slop: 5,
+      '##hammer': 6,
+      checks: 7,
+      text: 8,
+    },
+  },
+}
+
+describe('createTokenizer', () => {
+  it('returns the encoded ids as a BigInt64Array, in order', () => {
+    const tokenizer = createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' })
+
+    const { data } = tokenizer('slophammer checks text').input_ids
+
+    expect(data).toBeInstanceOf(BigInt64Array)
+    expect([...data]).toEqual([1n, 5n, 6n, 7n, 8n, 2n])
+  })
+
+  it('adds the template special tokens by default and when asked explicitly', () => {
+    const tokenizer = createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' })
+
+    expect([...tokenizer('checks text').input_ids.data]).toEqual([1n, 7n, 8n, 2n])
+    expect([...tokenizer('checks text', { add_special_tokens: true }).input_ids.data]).toEqual([
+      1n,
+      7n,
+      8n,
+      2n,
+    ])
+  })
+
+  it('omits them when add_special_tokens is false', () => {
+    const tokenizer = createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' })
+
+    expect([...tokenizer('checks text', { add_special_tokens: false }).input_ids.data]).toEqual([
+      7n,
+      8n,
+    ])
+  })
+
+  it('maps an out-of-vocabulary word to the unknown token', () => {
+    const tokenizer = createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' })
+
+    expect([...tokenizer('mystery').input_ids.data]).toEqual([1n, 3n, 2n])
+  })
+
+  it('resolves pad_token_id from the config pad token', () => {
+    expect(createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' }).pad_token_id).toBe(0)
+  })
+
+  it('accepts both serialized AddedToken forms of a pad token', () => {
+    const legacy = { pad_token: { __type: 'AddedToken', content: '[PAD]' } }
+    const modern = {
+      pad_token: { content: '[PAD]', lstrip: false, rstrip: false, normalized: false, single_word: false },
+    }
+
+    expect(createTokenizer(TOKENIZER_JSON, legacy).pad_token_id).toBe(0)
+    expect(createTokenizer(TOKENIZER_JSON, modern).pad_token_id).toBe(0)
+  })
+
+  it('falls back to the end-of-sequence token when no pad token is configured', () => {
+    expect(createTokenizer(TOKENIZER_JSON, { eos_token: '[EOS]' }).pad_token_id).toBe(4)
+  })
+
+  // The loader treats an absent pad id as fatal after exhausting tokenizer.json
+  // and the contract (see resolveRuntimeContract). Inventing 0 here would put a
+  // confident, wrongly-padded score in front of the user — see #10.
+  it('leaves pad_token_id undefined when neither token is configured', () => {
+    expect(createTokenizer(TOKENIZER_JSON, {}).pad_token_id).toBeUndefined()
+  })
+
+  it('leaves pad_token_id undefined when the configured token is not in the vocabulary', () => {
+    expect(createTokenizer(TOKENIZER_JSON, { pad_token: '[NOPE]' }).pad_token_id).toBeUndefined()
+  })
+})
+
+describe('a vocabulary with no unknown token', () => {
+  // The pinned 350M artifact is byte-level BPE, so every byte maps and this
+  // cannot fire there. It can for a tokenizer.json that declares no unknown
+  // token: `encode` falls back to `unk_token_id`, which is itself undefined.
+  const NO_UNK = {
+    ...TOKENIZER_JSON,
+    model: { ...TOKENIZER_JSON.model, unk_token: null },
+  }
+
+  it('names the failure instead of raising a bare BigInt TypeError', () => {
+    const tokenizer = createTokenizer(NO_UNK, { pad_token: '[PAD]' })
+
+    expect(() => tokenizer('mystery')).toThrow(/no id.*no unknown token/s)
+  })
+
+  it('still encodes text the vocabulary does cover', () => {
+    const tokenizer = createTokenizer(NO_UNK, { pad_token: '[PAD]' })
+
+    expect([...tokenizer('checks text').input_ids.data]).toEqual([1n, 7n, 8n, 2n])
+  })
+})
+
+describe('resolveSpecialToken', () => {
+  it('takes the first key that is present and non-empty', () => {
+    expect(resolveSpecialToken({ pad_token: '[PAD]', eos_token: '[EOS]' }, 'pad_token', 'eos_token')).toBe(
+      '[PAD]',
+    )
+    expect(resolveSpecialToken({ pad_token: null, eos_token: '[EOS]' }, 'pad_token', 'eos_token')).toBe(
+      '[EOS]',
+    )
+    expect(resolveSpecialToken({}, 'pad_token', 'eos_token')).toBeNull()
+  })
+
+  // Hugging Face has written all three of these over the years; transformers'
+  // own helper recognised only the `__type` form.
+  it('unwraps every object form that carries a string content', () => {
+    expect(
+      resolveSpecialToken({ pad_token: { __type: 'AddedToken', content: '[PAD]' } }, 'pad_token'),
+    ).toBe('[PAD]')
+    expect(resolveSpecialToken({ pad_token: { content: '[PAD]', lstrip: false } }, 'pad_token')).toBe(
+      '[PAD]',
+    )
+  })
+
+  // Skipping to the next key would pad with the end-of-sequence id instead of
+  // the pad id, silently.
+  it.each([
+    ['no content at all', { id: 0 }],
+    ['an empty content', { content: '' }],
+    ['a non-string content', { content: 42 }],
+  ])('refuses an object with %s rather than falling through', (_label, padToken) => {
+    expect(() =>
+      resolveSpecialToken({ pad_token: padToken, eos_token: '[EOS]' }, 'pad_token', 'eos_token'),
+    ).toThrow(/Unrecognised special token/)
+  })
+})

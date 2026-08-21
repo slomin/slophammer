@@ -13,6 +13,29 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 - Run the right thing at the right time — `pnpm test` is fast (<2 s), `pnpm test:e2e` is ~2 s per spec.
 - Never commit code whose tests don't prove the behaviour the commit claims.
 
+**Tokenizer drift.** `@huggingface/tokenizers` is pinned to an *exact* version:
+it is pre-1.0, it decides every token id, and one changed id can flip a verdict
+across the calibration threshold without raising anything. (`onnxruntime-web`
+stays on a caret range — it moves the logits too, but it is a 1.x package with
+semver discipline, and `pnpm qa:runtime --compare` catches a scoring change on
+either of them end to end.)
+
+`tests/unit/tokenizer-vectors.test.ts` re-checks recorded ids from the real 350M
+vocabulary. It needs that vocabulary on disk and **skips silently without it**,
+so on a fresh checkout `pnpm test` is green whether or not it ran — do not treat
+a green run as evidence the tokenizer is unchanged. Extract it once:
+
+```sh
+unzip -o -j references/models/slophammer_350m_v0_1.zip \
+  tokenizer.json tokenizer_config.json -d references/models/tokenizer
+```
+
+Before accepting a tokenizer bump, run it as a hard gate rather than a skip:
+
+```sh
+SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test
+```
+
 ## Commands (quick reference)
 
 | Command | What it does |
@@ -30,6 +53,7 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
 | `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
 | `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
+| `pnpm check:package` | Audit an **existing** `.output/chrome-mv3` — no symlinks, one ONNX Runtime WASM binary at `ort/`, every `ORT_RUNTIME_FILES` entry present, JavaScript under budget. Prints the build's timestamp and sizes. Build first; `pnpm release` runs it on the packed tree and deletes the zip if it fails. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
@@ -358,6 +382,37 @@ context-menu click
   why it reproduced only in stable Chrome. Fix: fire-and-forget the tab
   send (`forwardToTab` helper). Reference implementation in `references/`
   uses the same pattern.
+- **50 MB of WebAssembly nobody ever executed.** The package reached 78 MB with
+  three `.wasm` binaries in it, only one of which is loaded. Two independent
+  causes, neither visible to tests or typecheck: importing one tokenizer symbol
+  from `@huggingface/transformers` dragged in that library's own ONNX backend
+  and a second `onnxruntime-web`; and ONNX Runtime's *default* entry is the
+  bundled one, which inlines the emscripten factory and so carries
+  `new URL('…asyncify.wasm', import.meta.url)` — enough for Vite to emit its own
+  copy of a binary we already ship at `ort/` and load by path. Fix: build the
+  tokenizer directly on `@huggingface/tokenizers` (which is what
+  `PreTrainedTokenizer` wraps anyway), and select ORT's
+  `onnxruntime-web-use-extern-wasm` export condition in `wxt.config.ts`. That
+  condition is load-bearing — dropping it silently doubles the package.
+  `pnpm check:package` guards this, because only the build output shows it —
+  but note *how*. The extern-wasm condition is global, so a second
+  `onnxruntime-web` arriving transitively resolves to the extern entry too and
+  emits no extra `.wasm`. Counting binaries would not see it. The JavaScript
+  budget is what catches that case, and the runtime-files assertion covers the
+  new failure the condition introduces: the emscripten factory `.mjs` used to
+  be inlined, and is now fetched at startup, so losing it breaks both providers
+  while the build stays green.
+- **A guard that cannot fail is worse than no guard.** Two review rounds killed
+  two spellings of `check-package.mjs`'s "am I the entry module?" test: a
+  checkout path containing a space broke the first, a symlinked path broke the
+  second, and each time the whole audit became a silent no-op that exited 0 and
+  let `pnpm release` ship unchecked. The third version has no such test — the
+  rules live in `scripts/package-audit.mjs`, which is only ever imported, and
+  `scripts/check-package.mjs` is only ever executed. `generate-icons.mjs` and
+  `debug-extension.mjs` still carry their own spellings of the check and are
+  still symlink-fragile; if either grows teeth, split it the same way. A walk
+  that skipped symlinked directories hid a second binary from the same audit,
+  so the package is now rejected outright if it contains any symlink.
 - **Reddit: card existed in DOM but was invisible.** The old content-card host was an
   undefined custom element (`<slop-hammer-card>`). Reddit ships global
   `:not(:defined) { visibility: hidden; }`, so the host inherited `visibility: hidden`
@@ -376,8 +431,11 @@ install/               zip orchestrator + OPFS writer + fflate reader + file rec
 llm/                   classifier interface, Fake + Onnx impls, contract, fp16, token prep, opfs reader
 messaging/             protocol types + discriminated-union guards + logger with error forwarding
 scripts/               launch-chrome, launch-real-chrome, release, reload, install-cft,
-                       generate-icons, serve-test-page
+                       generate-icons, serve-test-page, qa-setup, qa-runtime,
+                       debug-extension, check-package (CLI) + package-audit (rules)
 tests/unit/            Vitest specs — one per pure module
+tests/fixtures/        Recorded data the specs assert against (350M token vectors)
+                       — needs `references/models/tokenizer/` extracted, else skips
 tests/e2e/             Playwright E2E + persistent-context fixtures
 references/releases/current/unpacked   What to Load unpacked for manual testing
 ```

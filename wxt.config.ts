@@ -1,4 +1,5 @@
 import { defineConfig } from 'wxt'
+import { defaultClientConditions } from 'vite'
 import { cpSync, mkdirSync, rmSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { createRequire } from 'node:module'
@@ -23,10 +24,23 @@ copyOrtRuntime()
 export default defineConfig({
   srcDir: '.',
   vite: () => ({
+    resolve: {
+      // Selects ONNX Runtime's extern-wasm entry over its bundled one. The
+      // bundled entry inlines the emscripten factory, which carries
+      // `new URL('…asyncify.wasm', import.meta.url)` — enough for Vite to emit
+      // its own 27 MB copy of a binary we already ship at `ort/` and load by
+      // path through `ort.env.wasm.wasmPaths`. The extern entry imports the
+      // factory from that same path at runtime instead (#34).
+      //
+      // Spread rather than replace: this list overrides Vite's defaults
+      // wholesale, and dropping `browser` alone would resolve packages to their
+      // Node builds.
+      conditions: ['onnxruntime-web-use-extern-wasm', ...defaultClientConditions],
+    },
     build: {
       // The tokenizer and provider bootstrap live in the classifier worker.
       // Keep the ceiling tight so unexpected runtime growth remains visible.
-      chunkSizeWarningLimit: 655,
+      chunkSizeWarningLimit: 120,
     },
   }),
   manifest: {
