@@ -97,9 +97,20 @@ Content security policy:
 
 ## Store assets
 
-- `store-assets/chrome-web-store/screenshot-options-1280x800.png`
-- `store-assets/chrome-web-store/screenshot-result-basic-1280x800.png`
-- `store-assets/chrome-web-store/screenshot-result-advanced-1280x800.png`
-- `store-assets/chrome-web-store/promo-small-440x280.png`
+Screenshots, in upload order:
 
-Regenerate these after UI changes and verify every visible product name is exactly `SlopHammer`.
+1. `store-assets/chrome-web-store/screenshot-1-hero-1280x800.png`
+2. `store-assets/chrome-web-store/screenshot-2-advanced-1280x800.png`
+3. `store-assets/chrome-web-store/screenshot-3-flow-1280x800.png`
+4. `store-assets/chrome-web-store/screenshot-4-options-1280x800.png`
+5. `store-assets/chrome-web-store/screenshot-5-themes-1280x800.png`
+
+Promo tiles:
+
+- Small promo tile (required): `store-assets/chrome-web-store/promo-small-440x280.png`
+- Marquee promo tile: `store-assets/chrome-web-store/promo-marquee-1400x560.png`
+
+Regenerate with `pnpm build && pnpm store:assets` after UI changes; the card and
+options captures inside the scenes are taken from the built extension, and the run
+fails if any output is not the size the Store expects. Verify every visible product
+name is exactly `SlopHammer`.
