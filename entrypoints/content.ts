@@ -385,18 +385,25 @@ export default defineContentScript({
 
     // Follow the text. Scroll events do not bubble, so listen in the capture
     // phase to see inner scroll containers too; coalesce to one placement per
-    // frame. Idle is the common case and returns before doing any work.
-    let trackScheduled = false
-    function scheduleTrack() {
-      if (trackScheduled || state.kind === 'idle' || !card || isDragged) return
-      trackScheduled = true
+    // frame, with a pending 'place' outranking a 'track'. A scroll tracks; a
+    // resize is a discrete act like opening the drawer, so it decides afresh
+    // rather than leaving a shifted card over its text. Idle is the common
+    // case and returns before doing any work.
+    let scheduled: PositionReason | null = null
+    function schedulePosition(reason: PositionReason) {
+      if (state.kind === 'idle' || !card || isDragged) return
+      if (scheduled === 'place') return
+      const firstInFrame = scheduled === null
+      scheduled = reason
+      if (!firstInFrame) return
       requestAnimationFrame(() => {
-        trackScheduled = false
-        if (state.kind !== 'idle' && card && !isDragged) position(card, 'track')
+        const why = scheduled ?? 'track'
+        scheduled = null
+        if (state.kind !== 'idle' && card && !isDragged) position(card, why)
       })
     }
-    window.addEventListener('scroll', scheduleTrack, { capture: true, passive: true })
-    window.addEventListener('resize', scheduleTrack, { passive: true })
+    window.addEventListener('scroll', () => schedulePosition('track'), { capture: true, passive: true })
+    window.addEventListener('resize', () => schedulePosition('place'), { passive: true })
 
     function showToast(text: string) {
       const host = document.createElement('div')
