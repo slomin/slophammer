@@ -42,8 +42,11 @@ const repoRoot = resolve(__dirname, '..')
 process.chdir(repoRoot)
 
 const CDP_PORT = 9333
-// debug-extension.mjs reads the port when it is imported, so set it first.
+// debug-extension.mjs reads the port when it is imported, so set it first —
+// and drop the full-URL override, which would otherwise silently point every
+// call at the developer's live QA browser and reload their real extension.
 process.env.SLOPHAMMER_CDP_PORT = String(CDP_PORT)
+delete process.env.SLOPHAMMER_CDP
 const debug = await import('./debug-extension.mjs')
 const { say, targets, openTab, closeTab, tabIdForHref, dispatchClassify, waitForCard, attach } = debug
 
@@ -181,19 +184,31 @@ function buildLegacy() {
   return built
 }
 
+// Swap the directory Chrome has loaded with two renames rather than an
+// rm-then-cp window during which the path is half-written.
 function stage(buildDir) {
-  fs.rmSync(EXT_DIR, { recursive: true, force: true })
-  fs.cpSync(buildDir, EXT_DIR, { recursive: true })
+  const next = `${EXT_DIR}.next`
+  const old = `${EXT_DIR}.old`
+  fs.rmSync(next, { recursive: true, force: true })
+  fs.rmSync(old, { recursive: true, force: true })
+  fs.cpSync(buildDir, next, { recursive: true })
+  if (fs.existsSync(EXT_DIR)) fs.renameSync(EXT_DIR, old)
+  fs.renameSync(next, EXT_DIR)
+  fs.rmSync(old, { recursive: true, force: true })
   say(`staged ${manifestVersion(EXT_DIR)} at ${EXT_DIR}`)
 }
 
 // ---------------------------------------------------------------------------
 // Probes, all evaluated in an extension context (same origin as OPFS)
 
+let EXT_ID = null
+let LEGACY_TREE = new Map()
+
 const READ_STORAGE = `chrome.storage.local.get(null)`
 const READ_SENTINEL = `(async()=>{try{const r=await navigator.storage.getDirectory();const d=await r.getDirectoryHandle('slop-hammer');return JSON.parse(await (await (await d.getFileHandle('.ready')).getFile()).text())}catch(e){return null}})()`
 const READ_JOURNAL = `(async()=>{try{const r=await navigator.storage.getDirectory();return JSON.parse(await (await (await r.getFileHandle('.slophammer-v1-migration.json')).getFile()).text())}catch(e){return null}})()`
-const OPFS_TREE = `(async()=>{const out=[];async function walk(dir,p){for await (const [name,h] of dir.entries()){const q=p+'/'+name;if(h.kind==='directory'){out.push(q+'/');await walk(h,q)}else out.push(q)}}await walk(await navigator.storage.getDirectory(),'');return out.sort()})()`
+const OPFS_TREE = `(async()=>{const out=[];async function walk(dir,p){for await (const [name,h] of dir.entries()){const q=p+'/'+name;if(h.kind==='directory'){out.push({path:q+'/',size:0});await walk(h,q)}else out.push({path:q,size:(await h.getFile()).size})}}await walk(await navigator.storage.getDirectory(),'');return out.sort((a,b)=>a.path<b.path?-1:1)})()`
+const READ_CONTRACT = (file) => `(async()=>{try{const r=await navigator.storage.getDirectory();const d=await (await r.getDirectoryHandle('slop-hammer')).getDirectoryHandle('model');return JSON.parse(await (await (await d.getFileHandle(${JSON.stringify(file)})).getFile()).text())}catch(e){return null}})()`
 
 // The extension's own service worker, verified to be one: Chrome lists other
 // service_worker targets too, and the first match is not necessarily ours. An
@@ -203,7 +218,10 @@ async function extensionContext() {
     const list = await targets()
     // Chrome's own component extensions show up here too (a thunk.js worker
     // sat ahead of ours), so try every candidate and keep the one that is us.
-    for (const candidate of list.filter((t) => t.type === 'service_worker' && t.url.startsWith('chrome-extension://'))) {
+    const candidates = list.filter(
+      (t) => t.type === 'service_worker' && t.url.startsWith('chrome-extension://') && (!EXT_ID || new URL(t.url).host === EXT_ID),
+    )
+    for (const candidate of candidates) {
       const sw = await attach((t) => t.id === candidate.id, 'sw')
       if (!sw) continue
       const ok = await sw.eval(`typeof chrome !== 'undefined' && !!chrome.storage?.local`, 5000).catch(() => false)
@@ -233,8 +251,6 @@ async function probe(ctx, expr, ms = 15_000) {
   if (value && value.__error) throw new Error(value.__error)
   return value
 }
-
-let EXT_ID = null
 
 // Reload the unpacked extension in place, exactly as the Reload button on
 // chrome://extensions does. chrome.developerPrivate exists only in that WebUI,
@@ -274,6 +290,51 @@ async function reloadExtension() {
     await sleep(500)
   }
   throw new Error(`extension did not come back as ${want} after the reload`)
+}
+
+// What Chrome told the extension on the reload. The worker logs the
+// onInstalled details object; the console buffer is replayed to a fresh CDP
+// session with the object still addressable, so read its properties rather
+// than racing the migration's storage wipe for the persisted intent.
+async function readOnInstalled() {
+  const target = (await targets()).find(
+    (t) => t.type === 'service_worker' && t.url.startsWith(`chrome-extension://${EXT_ID}/`),
+  )
+  if (!target) return null
+  const ws = new WebSocket(target.webSocketDebuggerUrl)
+  await new Promise((res, rej) => {
+    ws.addEventListener('open', res, { once: true })
+    ws.addEventListener('error', rej, { once: true })
+  })
+  let id = 0
+  const pending = new Map()
+  let objectId = null
+  ws.addEventListener('message', (e) => {
+    const m = JSON.parse(e.data)
+    if (m.id && pending.has(m.id)) {
+      pending.get(m.id)(m.result)
+      pending.delete(m.id)
+    }
+    if (m.method === 'Runtime.consoleAPICalled') {
+      const text = m.params.args.map((a) => a.value ?? a.description ?? '').join(' ')
+      if (text.includes('onInstalled')) objectId = m.params.args.find((a) => a.type === 'object')?.objectId ?? objectId
+    }
+  })
+  const send = (method, params = {}) =>
+    new Promise((res) => {
+      const i = ++id
+      pending.set(i, res)
+      ws.send(JSON.stringify({ id: i, method, params }))
+    })
+  try {
+    await send('Runtime.enable')
+    await sleep(1000)
+    if (!objectId) return null
+    const r = await send('Runtime.getProperties', { objectId, ownProperties: true })
+    return Object.fromEntries((r?.result ?? []).map((p) => [p.name, p.value?.value]))
+  } finally {
+    ws.close()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,10 +380,12 @@ async function populateLegacyProfile() {
 
   const storage = await probe(sw, READ_STORAGE)
   const tree = await probe(sw, OPFS_TREE)
+  LEGACY_TREE = new Map(tree.map((f) => [f.path, f.size]))
+  const legacyBytes = tree.reduce((n, f) => n + f.size, 0)
   record(
     'legacy profile populated',
     typeof sentinel.checkpointId === 'string' && sentinel.checkpointId !== SUPPORTED.checkpointId,
-    `sentinel=${JSON.stringify(sentinel.checkpointId)} files=${tree.length} storageKeys=${Object.keys(storage).sort().join(',')} (${elapsed(start)})`,
+    `sentinel=${JSON.stringify(sentinel.checkpointId)} files=${tree.length} bytes=${legacyBytes} storageKeys=${Object.keys(storage).sort().join(',')} (${elapsed(start)})`,
   )
   options.close()
   sw.close()
@@ -374,7 +437,7 @@ async function watchMigration({ until, budgetMs }) {
   throw new Error(`migration did not reach the expected state inside ${budgetMs / 1000}s`)
 }
 
-function assertUpgraded(label, { timeline, storage, journal, intentSeen }, sentinel, tree) {
+function assertUpgraded(label, { timeline, storage, journal, intentSeen, installed }, sentinel, tree, contract) {
   const phases = timeline.map((e) => e.phase)
   const order = ['downloading', 'installing', 'ready'].every((p, i, arr) => {
     const at = phases.indexOf(p)
@@ -382,9 +445,9 @@ function assertUpgraded(label, { timeline, storage, journal, intentSeen }, senti
   })
   record(`${label}: phases`, order, `${[...new Set(phases)].join(' → ')}`)
   record(
-    `${label}: intent`,
-    intentSeen?.previousVersion === LEGACY_VERSION && intentSeen?.targetVersion === manifestVersion(EXT_DIR),
-    JSON.stringify(intentSeen),
+    `${label}: onInstalled`,
+    installed?.reason === 'update' && installed?.previousVersion === LEGACY_VERSION,
+    `${JSON.stringify(installed)}${intentSeen ? ` intent=${JSON.stringify(intentSeen)}` : ' (intent key already wiped when first polled)'}`,
   )
   record(
     `${label}: journal`,
@@ -394,7 +457,8 @@ function assertUpgraded(label, { timeline, storage, journal, intentSeen }, senti
   const settings = storage['slophammer-settings']
   const legacyGone =
     !('qa-upgrade-marker' in storage) &&
-    !(settings && settings.theme === 'dark' && settings.resultDetail === 'advanced') &&
+    settings?.theme !== 'dark' &&
+    settings?.resultDetail !== 'advanced' &&
     (storage.checkpoint_id === undefined || storage.checkpoint_id === SUPPORTED.checkpointId)
   record(
     `${label}: legacy storage`,
@@ -409,8 +473,19 @@ function assertUpgraded(label, { timeline, storage, journal, intentSeen }, senti
       sentinel?.hosted?.lfsOid === SUPPORTED.sha256,
     `checkpoint=${JSON.stringify(sentinel?.checkpointId)} hosted=${sentinel?.hosted?.filename} oid=${String(sentinel?.hosted?.lfsOid).slice(0, 12)}…`,
   )
-  const retired = tree.filter((p) => /0[._]8b|slop_hammer_0_8/i.test(p))
-  record(`${label}: retired files`, retired.length === 0 && tree.some((p) => p.endsWith('/.ready')), `opfs entries=${tree.length} retired=${retired.length}`)
+  // The retired and the pinned model use the same file names under
+  // slop-hammer/model/, so a name check cannot tell them apart. Compare
+  // contents: the contract file must declare the pinned version, and no
+  // weight file may still have the byte size it had in the legacy profile.
+  const weights = tree.filter((f) => /\.onnx(\.data_\d+)?$/.test(f.path))
+  const survivors = weights.filter((f) => LEGACY_TREE.get(f.path) === f.size)
+  const bytes = tree.reduce((n, f) => n + f.size, 0)
+  const legacyBytes = [...LEGACY_TREE.values()].reduce((n, v) => n + v, 0)
+  record(
+    `${label}: retired model gone`,
+    contract?.version === SUPPORTED.checkpointId && survivors.length === 0 && weights.length > 0 && tree.some((f) => f.path.endsWith('/.ready')),
+    `contract=${JSON.stringify(contract?.version)} weights=${weights.length} legacySizedWeights=${survivors.length} bytes ${legacyBytes} → ${bytes}`,
+  )
 }
 
 async function classifyOnce(sw) {
@@ -448,17 +523,26 @@ async function upgradeInPlace() {
   await sleep(1500)
   stage(NEW_BUILD)
   await reloadExtension()
+  const installed = await readOnInstalled()
+  say(`  onInstalled ${JSON.stringify(installed)}`)
+  return installed
+}
+
+async function snapshotInstall(sw, sentinel) {
+  const tree = await probe(sw, OPFS_TREE)
+  const contract = sentinel?.contractFile ? await probe(sw, READ_CONTRACT(sentinel.contractFile)) : null
+  return { tree, contract }
 }
 
 async function upgradeAndVerify() {
-  await upgradeInPlace()
+  const installed = await upgradeInPlace()
   const watched = await watchMigration({
     until: ({ phase }) => phase === 'ready' || phase === 'error',
     budgetMs: MIGRATION_MS,
   })
   const sentinel = await probe(watched.sw, READ_SENTINEL)
-  const tree = await probe(watched.sw, OPFS_TREE)
-  assertUpgraded('upgrade', watched, sentinel, tree)
+  const { tree, contract } = await snapshotInstall(watched.sw, sentinel)
+  assertUpgraded('upgrade', { ...watched, installed }, sentinel, tree, contract)
   await classifyOnce(watched.sw)
   watched.sw.close()
   await stopChrome()
@@ -467,12 +551,20 @@ async function upgradeAndVerify() {
 async function interruptAndResume() {
   await restoreLegacyProfile()
   stage(resolve(LEGACY_WORKTREE, '.output/chrome-mv3'))
-  await upgradeInPlace()
+  const installed = await upgradeInPlace()
+  // Kill at the first sight of the download. Progress may never report (a
+  // response without content-length publishes 0 throughout) and a fast link
+  // can finish between two polls, so a later phase is a distinct outcome,
+  // not a twenty-minute wait.
   const mid = await watchMigration({
-    until: ({ phase, state }) => phase === 'downloading' && (state?.progress ?? 0) >= 5,
+    until: ({ phase }) => phase === 'downloading' || phase === 'installing' || phase === 'ready' || phase === 'error',
     budgetMs: MIGRATION_MS,
   })
   mid.sw.close()
+  const midPhase = mid.storage['slophammer-v1-migration']?.phase
+  if (midPhase !== 'downloading') {
+    throw new Error(`the download outran the kill window — first observed phase was ${midPhase}; rerun on a slower link or throttle the fetch`)
+  }
   say(`  killing Chrome at downloading ${mid.storage['slophammer-v1-migration']?.progress}%`)
   await stopChrome('SIGKILL')
 
@@ -489,20 +581,19 @@ async function interruptAndResume() {
     `first observed phase after restart=${firstAfterRestart}`,
   )
   const sentinel = await probe(resumed.sw, READ_SENTINEL)
-  const tree = await probe(resumed.sw, OPFS_TREE)
-  // The intent was written by the first (killed) run; after a restart the
-  // recovery path reads it rather than re-persisting it, so do not require
-  // seeing it again here — the journal and outcome are what matter.
-  const merged = { ...resumed, intentSeen: resumed.intentSeen ?? mid.intentSeen }
-  assertUpgraded('resume', merged, sentinel, tree)
+  const { tree, contract } = await snapshotInstall(resumed.sw, sentinel)
+  // onInstalled fired on the reload before the kill; the relaunch recovers
+  // from the persisted intent and journal, which is the point of this pass.
+  const merged = { ...resumed, intentSeen: resumed.intentSeen ?? mid.intentSeen, installed }
+  assertUpgraded('resume', merged, sentinel, tree, contract)
   resumed.sw.close()
   await stopChrome()
 }
 
-async function teardown() {
+async function teardown(keep) {
   await stopChrome().catch(() => {})
-  if (KEEP) {
-    say(`kept scratch state under ${SCRATCH}`)
+  if (keep) {
+    say(`kept scratch state under ${SCRATCH} (legacy build, profile snapshot, staged extension)`)
     return
   }
   for (const dir of [PROFILE, PROFILE_SNAPSHOT, EXT_DIR]) fs.rmSync(dir, { recursive: true, force: true })
@@ -538,7 +629,9 @@ try {
   failure = error
   say(`\nRUN ABORTED: ${error?.stack ?? error}`)
 } finally {
-  await teardown()
+  // A failed run keeps its evidence (and the minutes-long legacy build);
+  // a clean one removes everything unless asked not to.
+  await teardown(KEEP || failure !== null || results.some((r) => !r.ok))
 }
 
 const failed = results.filter((r) => !r.ok)

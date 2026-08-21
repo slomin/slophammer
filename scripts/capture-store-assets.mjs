@@ -27,22 +27,36 @@ const repoRoot = path.resolve(__dirname, '..')
 process.chdir(repoRoot)
 
 const argv = process.argv.slice(2)
-const copyToIndex = argv.indexOf('--copy-to')
-const COPY_TO = copyToIndex === -1 ? null : argv[copyToIndex + 1]
-if (copyToIndex !== -1 && (!COPY_TO || COPY_TO.startsWith('--'))) {
-  console.error('--copy-to requires a directory')
-  process.exit(1)
+function flagValue(name) {
+  const eq = argv.find((a) => a.startsWith(`${name}=`))
+  if (eq) return eq.slice(name.length + 1)
+  const i = argv.indexOf(name)
+  if (i === -1) return null
+  const value = argv[i + 1]
+  if (!value || value.startsWith('--')) {
+    console.error(`${name} requires a directory`)
+    process.exit(1)
+  }
+  return value
 }
+const COPY_TO = flagValue('--copy-to')
 
 const OUT_DIR = path.resolve('store-assets/chrome-web-store')
 const TMP_DIR = path.join(os.tmpdir(), `slophammer-store-assets-${process.pid}`)
 const PROFILE_DIR = path.join(TMP_DIR, 'profile')
 const CAPTURE_DIR = path.join(TMP_DIR, 'captures')
+const RENDER_DIR = path.join(TMP_DIR, 'render')
 const EXT_PATH = path.resolve('.output/chrome-mv3')
 const FIXTURE_URL = 'http://slop-hammer-store.test/'
 // Room around the card for its drop shadow (24px blur + 8px offset in dark).
 const CARD_PAD = 32
 const OPTIONS_VIEWPORT = { width: 720, height: 720 }
+// The card shows the time between classify:started and classify:result as
+// "Analysis time". A back-to-back dispatch would render "sub 0.1s" on a Store
+// screenshot, next to copy that calls it inference time. Hold the result for
+// as long as a warm WebGPU run takes on the 350M model (1.1-1.8 s measured by
+// qa:runtime), so the number on the listing is representative, not flattering.
+const ANALYSIS_DELAY_MS = 1400
 
 const LONG_TEXT =
   `In today's rapidly evolving digital landscape, leveraging artificial intelligence to drive transformative business outcomes has become not just an advantage, but a necessity. Organizations that proactively embrace cutting-edge AI solutions are uniquely positioned to unlock unprecedented value, streamline operational efficiency, and foster a culture of continuous innovation.`
@@ -94,7 +108,7 @@ async function dispatchClassification(context, page, text) {
 
   const requestId = 'store-assets-' + process.pid
   await worker.evaluate(
-    async ([tabId, requestId, text, result]) => {
+    async ([tabId, requestId, text, result, delayMs]) => {
       const startedMsg = {
         type: 'classify:started',
         requestId,
@@ -110,9 +124,10 @@ async function dispatchClassification(context, page, text) {
           await new Promise((r) => setTimeout(r, 100))
         }
       }
+      await new Promise((r) => setTimeout(r, delayMs))
       await chrome.tabs.sendMessage(tabId, { type: 'classify:result', requestId, tabId, result })
     },
-    [tabId, requestId, text, SYNTHETIC_RESULT],
+    [tabId, requestId, text, SYNTHETIC_RESULT, ANALYSIS_DELAY_MS],
   )
 }
 
@@ -211,8 +226,21 @@ async function captureProduct() {
     await options.goto(`chrome-extension://${extensionId}/options.html`)
     await options.waitForLoadState('networkidle')
     await options.waitForTimeout(300)
+    // Capture down to the end of the last settings group that fits the
+    // scene, on a group boundary — never mid-row. The scene asserts the
+    // embedded image is shown whole.
+    const optionsBottom = await options.evaluate(() => {
+      const group = document.querySelector('[data-testid="group-card-placement"]')
+      if (!(group instanceof HTMLElement)) throw new Error('options page has no card-placement group')
+      return Math.ceil(group.getBoundingClientRect().bottom + window.scrollY + 6)
+    })
     const optionsFile = path.join(CAPTURE_DIR, 'options.png')
-    await options.screenshot({ path: optionsFile, fullPage: true, scale: 'device' })
+    await options.screenshot({
+      path: optionsFile,
+      fullPage: true,
+      scale: 'device',
+      clip: { x: 0, y: 0, width: OPTIONS_VIEWPORT.width, height: optionsBottom },
+    })
     const optionsMeta = await sharp(optionsFile).metadata()
     const captures = {
       options: { dataUri: dataUri(optionsFile), width: optionsMeta.width / 2, height: optionsMeta.height / 2 },
@@ -274,14 +302,35 @@ async function renderScenes(captures) {
       await page.setContent(scene.render(captures), { waitUntil: 'load' })
       await page.evaluate(() => document.fonts.ready)
       await page.waitForTimeout(150)
-      const file = path.join(OUT_DIR, `${scene.name}.png`)
+      // Every embedded capture must be shown whole: nothing clipped by an
+      // overflow:hidden frame, nothing off-canvas.
+      const clipped = await page.evaluate(() =>
+        [...document.images]
+          .filter((img) => {
+            const r = img.getBoundingClientRect()
+            const vw = document.documentElement.clientWidth
+            const vh = document.documentElement.clientHeight
+            if (r.width === 0 || r.height === 0) return true
+            if (img.closest('.window')) {
+              const w = img.closest('.window').getBoundingClientRect()
+              if (r.bottom > w.bottom + 0.5 || r.right > w.right + 0.5) return true
+            }
+            return !img.classList.contains('capture') && !img.closest('.window')
+              ? false
+              : r.left < -0.5 || r.top < -0.5 || r.right > vw + 0.5 || r.bottom > vh + 0.5
+          })
+          .map((img) => img.getAttribute('alt') || img.className || 'img'),
+      )
+      const file = path.join(RENDER_DIR, `${scene.name}.png`)
       await page.screenshot({ path: file, scale: 'css', fullPage: false })
       await page.close()
 
       const meta = await sharp(file).metadata()
-      const ok = meta.width === scene.width && meta.height === scene.height && !meta.hasAlpha
+      const sized = meta.width === scene.width && meta.height === scene.height && !meta.hasAlpha
+      const whole = scene.allowBleed ? true : clipped.length === 0
+      const ok = sized && whole
       console.log(
-        `${ok ? 'PASS' : 'FAIL'}  ${scene.name.padEnd(34)} ${meta.width}x${meta.height}${meta.hasAlpha ? ' (alpha!)' : ''}`,
+        `${ok ? 'PASS' : 'FAIL'}  ${scene.name.padEnd(34)} ${meta.width}x${meta.height}${meta.hasAlpha ? ' (alpha!)' : ''}${whole ? '' : ` clipped capture: ${clipped.join(', ')}`}`,
       )
       if (!ok) problems.push(scene.name)
     }
@@ -291,9 +340,9 @@ async function renderScenes(captures) {
   return problems
 }
 
-function writeReadme() {
+function writeReadme(dir) {
   writeFileSync(
-    path.join(OUT_DIR, 'README.md'),
+    path.join(dir, 'README.md'),
     `# Chrome Web Store assets
 
 Generated with:
@@ -319,8 +368,13 @@ is rendered at its exact Store size with those captures embedded.
 | \`promo-marquee-1400x560.png\` | 1400x560 | Marquee promo tile |
 
 The verdict on the card is a fixture (\`rawPct: [5, 10, 15, 70]\`), not a
-classification of the sample paragraph. Every visible product name is
-\`SlopHammer\`.
+classification of the sample paragraph, and the analysis time it shows is the
+fixture's dispatch delay (${ANALYSIS_DELAY_MS} ms), set to what a warm WebGPU run of
+the 350M model measures in \`qa:runtime\`. Every visible product name is
+\`SlopHammer\`; \`tests/unit/store-scenes.test.ts\` and \`branding.test.ts\` hold
+the scene module to that. The scene fonts are system stacks (Iowan Old Style /
+Georgia, ui-monospace), so regenerate on the same platform to keep the set
+consistent.
 `,
   )
 }
@@ -332,20 +386,21 @@ async function main() {
   rmSync(TMP_DIR, { recursive: true, force: true })
   mkdirSync(CAPTURE_DIR, { recursive: true })
   mkdirSync(PROFILE_DIR, { recursive: true })
+  mkdirSync(RENDER_DIR, { recursive: true })
 
-  let problems
+  // Render next to the tracked assets, not over them: a failure half-way
+  // must leave the committed set untouched.
   try {
     const captures = await captureProduct()
+    const problems = await renderScenes(captures)
+    if (problems.length) {
+      throw new Error(`assets that failed their check: ${problems.join(', ')} — ${OUT_DIR} left untouched`)
+    }
+    writeReadme(RENDER_DIR)
     rmSync(OUT_DIR, { recursive: true, force: true })
-    mkdirSync(OUT_DIR, { recursive: true })
-    problems = await renderScenes(captures)
-    writeReadme()
+    cpSync(RENDER_DIR, OUT_DIR, { recursive: true })
   } finally {
     rmSync(TMP_DIR, { recursive: true, force: true })
-  }
-
-  if (problems.length) {
-    throw new Error(`assets with the wrong dimensions: ${problems.join(', ')}`)
   }
   if (COPY_TO) {
     const dest = path.resolve(COPY_TO)

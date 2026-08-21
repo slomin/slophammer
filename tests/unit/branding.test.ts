@@ -12,6 +12,7 @@ const visibleSurfaceFiles = [
   'content/result-summary.ts',
   'install/install-renderer.ts',
   'scripts/capture-store-assets.mjs',
+  'scripts/store-scenes.mjs',
   'scripts/release.mjs',
   'scripts/serve-test-page.mjs',
   'docs/chrome-web-store-submission.md',

@@ -279,10 +279,11 @@ export function renderFlow(c) {
 
 export function renderOptions(c) {
   const shot = c.options
-  const frameW = 600
-  const scale = frameW / shot.width
+  // Fit the whole capture: width-limited or height-limited, never cropped.
+  const scale = Math.min(600 / shot.width, 576 / shot.height)
+  const frameW = Math.round(shot.width * scale)
   const imgH = Math.round(shot.height * scale)
-  const frameH = Math.min(imgH, 582)
+  const frameH = imgH
   return page(
     1280,
     800,
@@ -296,9 +297,9 @@ export function renderOptions(c) {
     <div class="chips" style="position:absolute;left:48px;top:540px;width:520px">
       <span class="chip">SHA-256 verified</span>
       <span class="chip">Basic / Advanced</span>
-      <span class="chip">Light / Dark / System</span>
+      <span class="chip">Next to the text / Pinned</span>
     </div>
-    <div class="window" style="left:632px;top:104px;width:${frameW + 2}px;height:${frameH + 38}px">
+    <div class="window" style="left:${1232 - frameW - 2}px;top:104px;width:${frameW + 2}px;height:${frameH + 38}px">
       <div class="bar"><i></i><i></i><i></i><span>SlopHammer — options</span></div>
       <img src="${shot.dataUri}" width="${frameW}" height="${imgH}" alt="">
     </div>
@@ -373,6 +374,6 @@ export const SCENES = [
   { name: 'screenshot-3-flow-1280x800', width: 1280, height: 800, render: renderFlow },
   { name: 'screenshot-4-options-1280x800', width: 1280, height: 800, render: renderOptions },
   { name: 'screenshot-5-themes-1280x800', width: 1280, height: 800, render: renderThemes },
-  { name: 'promo-small-440x280', width: 440, height: 280, render: renderPromoSmall },
+  { name: 'promo-small-440x280', width: 440, height: 280, render: renderPromoSmall, allowBleed: true },
   { name: 'promo-marquee-1400x560', width: 1400, height: 560, render: renderMarquee },
 ]
