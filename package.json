@@ -24,7 +24,8 @@
     "debug": "node scripts/debug-extension.mjs",
     "qa:runtime": "node scripts/qa-runtime.mjs",
     "check:package": "node scripts/check-package.mjs",
-    "qa:placement": "node scripts/qa-placement.mjs"
+    "qa:placement": "node scripts/qa-placement.mjs",
+    "qa:upgrade": "node scripts/qa-upgrade.mjs"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
