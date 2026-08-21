@@ -31,7 +31,9 @@
 // explicitly: debug-extension.mjs leaves CDP websockets open, so without that
 // the process never exits and a finished run looks like a hang.
 import sharp from 'sharp'
+import { isCardBackground, near, placementProblem } from './placement-contract.mjs'
 import {
+  CARD_SNAPSHOT,
   CDP,
   TEST_PAGE,
   targets,
@@ -52,16 +54,6 @@ const only = argv.includes('--cases') ? 'cases' : argv.includes('--geometry') ? 
 const PLACEMENT_URL = new URL('/placement', TEST_PAGE).href
 const TEXT =
   'The quick brown fox jumps over the lazy dog while the committee deliberates at length about matters of no consequence whatsoever, producing minutes that nobody reads and decisions that nobody implements, which is roughly how these things tend to go in practice and has been for years.'
-const GAP = 8
-const MARGIN = 8
-const TOLERANCE = 1.5
-// .sh-card.dark / .sh-card.light --sh-bg; which one applies depends on the
-// profile's theme setting, so either counts as "painted".
-const CARD_BG = {
-  dark: [15, 15, 17],
-  light: [250, 250, 247],
-}
-
 const results = []
 const record = (name, ok, detail) => {
   results.push({ name, ok, detail })
@@ -85,61 +77,35 @@ const selectContents = (expr) => `(() => {
           viewport:{w:innerWidth,h:innerHeight}, ranges:getSelection().rangeCount, len:getSelection().toString().length}
 })()`
 
-const READ_CARD = `(() => {
-  const h = document.querySelector('[data-slop-hammer-card]')
-  if (!h) return null
-  const root = h.shadowRoot.querySelector('[data-testid="card-root"]')
-  const r = root.getBoundingClientRect()
-  const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
-  return {placement: root.dataset.placement ?? null, hidden: root.dataset.hidden === 'true',
-          visibility: getComputedStyle(root).visibility, inTopLayer: h.matches(':popover-open'),
-          top: r.top, left: r.left, bottom: r.bottom, right: r.right, h: r.height, w: r.width,
-          hitIsCard: hit === h, viewport: {w: innerWidth, h: innerHeight}}
-})()`
-
 const READ_SELECTION = `(() => {
   const s = getSelection(); if (!s || s.rangeCount === 0) return null
   const r = s.getRangeAt(0).getBoundingClientRect()
   return {top: r.top, bottom: r.bottom, left: r.left, right: r.right}
 })()`
 
-const near = (a, b) => Math.abs(a - b) <= TOLERANCE
-
-// What "adjacent or pinned" means in pixels; a reason when it does not hold.
-function placementProblem(card, sel, vp) {
-  if (card.top < -TOLERANCE || card.bottom > vp.h + TOLERANCE) {
-    return `card leaves the viewport (${Math.round(card.top)}..${Math.round(card.bottom)} of ${vp.h})`
-  }
-  switch (card.placement) {
-    case 'below':
-      return sel && near(card.top, sel.bottom + GAP) ? null : `below but gap is ${Math.round(card.top - (sel?.bottom ?? 0))}`
-    case 'above':
-      return sel && near(card.bottom, sel.top - GAP) ? null : `above but gap is ${Math.round((sel?.top ?? 0) - card.bottom)}`
-    case 'beside':
-      return sel && (near(card.left, sel.right + GAP) || near(card.right, sel.left - GAP)) ? null : 'beside but not touching the text'
-    case 'pinned':
-      return near(card.bottom, vp.h - MARGIN) && near(card.right, vp.w - MARGIN)
-        ? null
-        : `pinned but at ${Math.round(card.right)}x${Math.round(card.bottom)} of ${vp.w}x${vp.h}`
-    default:
-      return `unexpected placement ${card.placement}`
-  }
-}
-
 // One CSS pixel inside the card's left padding at mid height — away from the
-// rounded corners, which show whatever is behind them.
+// rounded corners, which show whatever is behind them. Rule 11: the clip is
+// in document coordinates, so the viewport rect needs the scroll offset added
+// or the sample lands on whatever page content scrolled past.
 async function paintedPixel(page, card) {
   const { data } = await page.send(
     'Page.captureScreenshot',
-    { format: 'png', clip: { x: card.left + 6, y: card.top + card.h / 2, width: 1, height: 1, scale: 1 } },
+    {
+      format: 'png',
+      clip: { x: card.scroll.x + card.left + 6, y: card.scroll.y + card.top + card.height / 2, width: 1, height: 1, scale: 1 },
+    },
     8000,
   )
   const { data: raw } = await sharp(Buffer.from(data, 'base64')).raw().toBuffer({ resolveWithObject: true })
   return [raw[0], raw[1], raw[2]]
 }
 
-const isCardBackground = (px) =>
-  Object.values(CARD_BG).some((bg) => bg.every((channel, i) => Math.abs(channel - px[i]) <= 8))
+// CARD_SNAPSHOT plus the shape the shared oracle reads.
+const readCard = async (page) => {
+  const snap = await page.eval(CARD_SNAPSHOT, 5000)
+  if (!snap?.mounted || snap.root === false) throw new Error('card is not mounted')
+  return { ...snap, ...snap.box }
+}
 
 const CASES = [
   ['plain', selectContents(`document.querySelector('#c-plain .t')`)],
@@ -210,7 +176,7 @@ async function classifyAndRead(page, sw, tabId, id) {
   // Two frames: the ResizeObserver sees the loading→ready size change, then
   // places.
   await page.eval(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`, 4000)
-  return page.eval(READ_CARD, 5000)
+  return readCard(page)
 }
 
 async function runCases(page, sw, tabId) {
@@ -225,14 +191,19 @@ async function runCases(page, sw, tabId) {
     }
     const card = await classifyAndRead(page, sw, tabId, 'placement-' + label.replace(/\W+/g, '-'))
     const sel = await page.eval(READ_SELECTION, 4000)
-    const painted = label === 'modal <dialog>' ? isCardBackground(await paintedPixel(page, card)) : card.hitIsCard
+    const pixel = label === 'modal <dialog>' ? await paintedPixel(page, card) : null
+    const painted = pixel ? isCardBackground(pixel) : card.visibleToUser
     const gap = Math.round(card.top - info.sel.bottom)
     const problem = placementProblem(card, sel, card.viewport)
     say(
       `${label.padEnd(23)} ${String(card.placement).padEnd(9)} ${String(info.sel.bottom).padStart(6)} ${String(Math.round(card.top)).padStart(8)} ` +
-        `${String(gap).padStart(6)} ${String(Math.round(card.left)).padStart(9)}  ${String(card.inTopLayer).padEnd(8)}  ${painted}`,
+        `${String(gap).padStart(6)} ${String(Math.round(card.left)).padStart(9)}  ${String(card.inTopLayer).padEnd(8)}  ${painted}${pixel ? ` rgb(${pixel})` : ''}`,
     )
-    record(label, !problem && painted, problem ?? (painted ? card.placement : 'not painted where the user would see it'))
+    record(
+      label,
+      !problem && painted,
+      problem ?? (painted ? card.placement : pixel ? `pixel rgb(${pixel}) is not a card background` : 'not what the user would hit there'),
+    )
     await dismiss(page)
   }
 }
@@ -252,7 +223,7 @@ const placeAt = (fraction) => `(() => {
 async function scrollBy(page, px) {
   await page.eval(`window.scrollBy(0, ${px})`, 4000)
   await page.eval(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`, 4000)
-  return { sel: await page.eval(READ_SELECTION, 4000), card: await page.eval(READ_CARD, 4000) }
+  return { sel: await page.eval(READ_SELECTION, 4000), card: await readCard(page) }
 }
 
 async function runScroll(page, sw, tabId) {
@@ -334,11 +305,13 @@ try {
   await closeTab(page)
 } catch (error) {
   failure = error
-  console.error('PLACEMENT QA FAILED:', error?.stack ?? error)
+  // Rule 1: unbuffered, or a SIGTERM can eat the only line that says why.
+  say(`PLACEMENT QA FAILED: ${error?.stack ?? error}`)
 }
 
 const failed = results.filter((r) => !r.ok)
 say('')
+if (failure) say(`run aborted after ${results.length} checks — the checks that never ran are not counted below`)
 say(`${results.length - failed.length}/${results.length} checks passed`)
 const exitCode = failure || failed.length ? 1 : 0
 say(`PLACEMENT QA COMPLETE exit=${exitCode}`)

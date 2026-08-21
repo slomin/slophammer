@@ -210,6 +210,12 @@ document, options page and content scripts — which is the whole point.
    handle `Page.javascriptDialogOpening`. Never detach while a modal is open:
    the renderer stays unresponsive and even `Runtime.enable` times out, which
    looks exactly like a hung extension.
+11. **`Page.captureScreenshot`'s `clip` is in document coordinates, not
+   viewport ones.** A rect from `getBoundingClientRect()` must have
+   `scrollX`/`scrollY` added first; without that every probe taken at scroll 0
+   passes and the first scrolled one samples page content instead of the
+   card. (Playwright's `page.screenshot({ clip })` is viewport-relative — it
+   adds the offset itself — so the same rect works unchanged there.)
 
 ## MV3 gotchas (read before changing anything messaging-related)
 
@@ -362,7 +368,7 @@ context-menu click
   -777. Fix: measure where the card actually landed and correct by the
   difference, rather than enumerating the CSS properties that cause it.
 - **Selections inside iframes have no rect in the top frame.** The content
-  script only runs top-level, so `captureSelectionRect()` returned null,
+  script only runs top-level, so the selection capture (now `captureSelectionRange()`) returned null,
   positioning was skipped entirely, and the card rendered below the fold.
   Fix: fall back to a viewport-anchored placement — since #37, the same
   bottom-right corner the `cardPlacement` setting pins to.
@@ -375,8 +381,12 @@ context-menu click
   card pins to the corner and stays there until the next classification — a
   new card whose text has already scrolled off screen pins too, so a result
   is never a hidden result. A card being tracked through a scroll shifts into
-  view instead, so it never jumps to the corner mid-scroll, and hides while
-  its text is fully off screen. There was no scroll listener before, and the
+  view instead (`data-placement="shifted"`, which may overlap the text), so
+  it never jumps to the corner mid-scroll, and hides while its text is fully
+  off screen. Every fresh decision — content change, drawer, resize, the
+  setting — recomputes from scratch; only tracking honours the last outcome.
+  The contract in pixels lives once, in `scripts/placement-contract.mjs`,
+  shared by the spec and `qa:placement`. There was no scroll listener before, and the
   ResizeObserver repositioned against a stale rect. Note for harnesses: a
   selection made programmatically off screen now yields a pinned card, which
   is what `qa:runtime`'s scrolled hostile check sees. `pnpm qa:placement` and `tests/e2e/card-placement.spec.ts` gate it.

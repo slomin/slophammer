@@ -65,7 +65,7 @@ export default defineContentScript({
     const instanceKey = Symbol.for('slophammer.contentInstance')
     const world = globalThis as unknown as Record<symbol, { alive(): boolean } | undefined>
     if (world[instanceKey]?.alive()) return
-    world[instanceKey] = {
+    const me = {
       alive() {
         try {
           return Boolean(browser.runtime?.id)
@@ -74,6 +74,7 @@ export default defineContentScript({
         }
       },
     }
+    world[instanceKey] = me
 
     installErrorForwarding('content')
     const log = createLogger('content')
@@ -88,10 +89,14 @@ export default defineContentScript({
 
     let state: CardState = initialCardState
     let card: CardElements | null = null
+    // Cleared on dismiss: a live Range pins its boundary nodes in memory and
+    // costs the page a boundary-point update on every DOM mutation.
     let anchor: Range | null = null
-    // Set when a new card found nothing adjacent that fits and went to the
-    // corner. It then stays there until the next classification, rather than
-    // bouncing between corner and text as the page scrolls.
+    // The outcome of the last fresh placement decision. While the card is
+    // merely tracking a scroll it must not leave the corner for the text and
+    // back again as the text drifts through positions that fit; the next
+    // fresh decision (new card, content or size change, resize, setting)
+    // recomputes it.
     let pinnedForThisCard = false
     // Once the user has dragged the card, `position()` must stop yanking it
     // back under the selection. Reset on each new classify:started so a fresh
@@ -111,10 +116,13 @@ export default defineContentScript({
       .catch((err) => log.error('settings load failed', err))
 
     settingsStore.subscribe((next) => {
+      const placementChanged = next.cardPlacement !== settings.cardPlacement
       settings = next
       if (!card) return
       applyTheme(card)
-      if (state.kind !== 'idle') position(card, 'place')
+      // Only the placement setting moves a showing card; a theme change must
+      // not relocate it.
+      if (placementChanged && state.kind !== 'idle') position(card, 'place')
     })
 
     function applyTheme(c: CardElements) {
@@ -274,9 +282,9 @@ export default defineContentScript({
     // normal page.
     let containingBlockOffset = { top: 0, left: 0 }
 
-    // 'place' decides from scratch — a new card, or one whose content changed.
-    // 'track' follows the text through a scroll or resize and must never move
-    // a card that is already on screen to the corner.
+    // 'place' decides from scratch — a new card, one whose content or size
+    // changed, a resize, a setting. 'track' follows the text through a scroll
+    // and must never move a card that is already on screen to the corner.
     type PositionReason = 'place' | 'track'
 
     function position(c: CardElements, reason: PositionReason) {
@@ -286,13 +294,20 @@ export default defineContentScript({
         width: c.refs.root.offsetWidth || 320,
         height: c.refs.root.offsetHeight || 180,
       }
-      // No rect means the selection isn't visible to this frame — an iframe or
-      // textarea selection, most often — or the page has rewritten the nodes
-      // the range pointed at. Both pin, rather than leaving the card at its
-      // default offsets below the fold.
       const rect = anchor ? anchorRect(anchor) : null
       let p: CardPosition
-      if (settings.cardPlacement === 'pinned' || pinnedForThisCard || !rect) {
+      if (settings.cardPlacement === 'pinned') {
+        p = pinnedCardPosition({ viewport, card })
+      } else if (!rect) {
+        // No rect means the selection isn't visible to this frame — an iframe
+        // or textarea selection, most often — or the page has rewritten the
+        // nodes the range pointed at. A new card pins rather than sitting at
+        // default offsets below the fold; a tracked card holds where it is,
+        // since a node that is momentarily boxless (content-visibility, a
+        // display toggle) would otherwise flick it to the corner and back.
+        if (reason === 'track') return
+        p = pinnedCardPosition({ viewport, card })
+      } else if (reason === 'track' && pinnedForThisCard) {
         p = pinnedCardPosition({ viewport, card })
       } else {
         p = placeCard({
@@ -301,7 +316,7 @@ export default defineContentScript({
           card,
           lastResort: reason === 'place' ? 'pinned' : 'shift',
         })
-        if (p.placement === 'pinned') pinnedForThisCard = true
+        if (reason === 'place') pinnedForThisCard = p.placement === 'pinned'
       }
 
       if (p.placement === 'hidden') {
@@ -312,12 +327,23 @@ export default defineContentScript({
       delete c.refs.root.dataset.hidden
       c.refs.root.dataset.placement = p.placement
 
+      // A tracking frame writes and returns: the containing-block offset was
+      // measured by the last fresh placement and does not change with scroll,
+      // and a read-back here would force a layout on every scrolled frame.
+      if (reason === 'track') {
+        c.refs.root.style.top = `${p.top + containingBlockOffset.top}px`
+        c.refs.root.style.left = `${p.left + containingBlockOffset.left}px`
+        return
+      }
+
       // If an ancestor carries a transform/filter/perspective it becomes the
       // containing block for position:fixed, and these offsets are measured
       // from the document instead of the viewport. Measure where the card
       // actually landed and correct by the difference. Repeat a couple of
       // times: a pure translation converges immediately, but a scaled ancestor
-      // needs another pass because the correction is scaled too.
+      // needs another pass because the correction is scaled too. In the top
+      // layer this converges on the first pass; it remains for browsers
+      // without the Popover API.
       let applied = { top: p.top, left: p.left }
       for (let attempt = 0; attempt < 3; attempt++) {
         c.refs.root.style.top = `${applied.top}px`
@@ -361,14 +387,14 @@ export default defineContentScript({
 
       if (state === prev) return
       const c = mountCard()
-      // The top layer is a stack and the last element shown is on top, so a new
-      // card re-enters it to sit above anything the page has opened since.
+      // The top layer is a stack and the last element shown is on top, so on
+      // every change the card leaves and re-enters it, to sit above anything
+      // the page opened since — including during the seconds of inference
+      // between the loading card and the result.
+      demoteFromTopLayer(c.host)
       if (state.kind === 'idle') {
-        demoteFromTopLayer(c.host)
+        anchor = null
       } else {
-        if (action.type === 'classify:started' || action.type === 'selection:too-short') {
-          demoteFromTopLayer(c.host)
-        }
         promoteToTopLayer(c.host)
       }
       if (action.type === 'classify:started') {
@@ -388,10 +414,23 @@ export default defineContentScript({
     // frame, with a pending 'place' outranking a 'track'. A scroll tracks; a
     // resize is a discrete act like opening the drawer, so it decides afresh
     // rather than leaving a shifted card over its text. Idle is the common
-    // case and returns before doing any work.
+    // case and returns before doing any work. An instance that has been
+    // superseded or orphaned (its host swept by a newer instance, or the
+    // extension context gone) lets go of the window rather than positioning
+    // a detached element every scrolled frame.
     let scheduled: PositionReason | null = null
+    const onScroll = () => schedulePosition('track')
+    const onResize = () => schedulePosition('place')
+    function releaseWindow() {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
     function schedulePosition(reason: PositionReason) {
       if (state.kind === 'idle' || !card || isDragged) return
+      if (world[instanceKey] !== me || !me.alive() || !card.host.isConnected) {
+        releaseWindow()
+        return
+      }
       if (scheduled === 'place') return
       const firstInFrame = scheduled === null
       scheduled = reason
@@ -402,8 +441,8 @@ export default defineContentScript({
         if (state.kind !== 'idle' && card && !isDragged) position(card, why)
       })
     }
-    window.addEventListener('scroll', () => schedulePosition('track'), { capture: true, passive: true })
-    window.addEventListener('resize', () => schedulePosition('place'), { passive: true })
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    window.addEventListener('resize', onResize, { passive: true })
 
     function showToast(text: string) {
       const host = document.createElement('div')

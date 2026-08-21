@@ -341,6 +341,13 @@ export const CARD_SNAPSHOT = `(() => {
     error:s.querySelector('[data-testid="error-message"]')?.textContent?.trim()||null,
     buckets:[0,1,2,3].map(i=>s.querySelector('[data-testid="raw-'+i+'"]')?.querySelector('.fill')?.dataset.pct??null),
     rect:{top:Math.round(r.top),left:Math.round(r.left)},
+    box:{top:r.top,left:r.left,bottom:r.bottom,right:r.right,width:r.width,height:r.height},
+    placement:root.dataset.placement??null,
+    hidden:root.dataset.hidden==='true',
+    visibility:getComputedStyle(root).visibility,
+    inTopLayer:h.matches(':popover-open'),
+    viewport:{width:innerWidth,height:innerHeight},
+    scroll:{x:scrollX,y:scrollY},
     onScreen: r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,
     visibleToUser: hit===h}
 })()`

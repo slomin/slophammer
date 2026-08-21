@@ -20,9 +20,11 @@ export interface CardSize {
 
 // Where the card ended up relative to the text it describes. `pinned` is the
 // bottom-right corner — both a setting and the fallback for anything the card
-// cannot be anchored to. `hidden` means the text is entirely off screen, so
-// there is nothing to sit next to.
-export type Placement = 'below' | 'above' | 'beside' | 'pinned' | 'hidden'
+// cannot be anchored to. `shifted` is a tracked card that no longer fits
+// anywhere adjacent and was pushed into the viewport instead, so it may
+// overlap its text. `hidden` means the text is entirely off screen, so there
+// is nothing to sit next to.
+export type Placement = 'below' | 'above' | 'beside' | 'pinned' | 'shifted' | 'hidden'
 
 export interface PlacedCard {
   placement: Exclude<Placement, 'hidden'>
@@ -137,5 +139,5 @@ export function placeCard(args: {
   }
 
   if (lastResort === 'pinned') return pinnedCardPosition({ viewport, card })
-  return { placement: 'below', top: clamp(belowTop, CARD_MARGIN, maxTop), left: alignedLeft }
+  return { placement: 'shifted', top: clamp(belowTop, CARD_MARGIN, maxTop), left: alignedLeft }
 }

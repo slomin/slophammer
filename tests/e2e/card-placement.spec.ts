@@ -1,5 +1,6 @@
 import type { BrowserContext, Locator, Page } from '@playwright/test'
 import sharp from 'sharp'
+import { MARGIN, isCardBackground, near, placementProblem } from '../../scripts/placement-contract.mjs'
 import { renderPlacementFrame, renderPlacementPage } from '../../scripts/placement-page.mjs'
 import { dispatchClassification, expect, gotoRoutes, setSettings, test } from './fixtures'
 
@@ -15,12 +16,6 @@ import { dispatchClassification, expect, gotoRoutes, setSettings, test } from '.
 
 const TEXT =
   'The quick brown fox jumps over the lazy dog while the committee deliberates at length about matters of no consequence whatsoever, producing minutes that nobody reads and decisions that nobody implements, which is roughly how these things tend to go in practice and has been for years.'
-const GAP = 8
-const MARGIN = 8
-const TOLERANCE = 1.5
-// .sh-card.dark --sh-bg
-const DARK_CARD_BG = [15, 15, 17] as const
-
 interface Rect {
   top: number
   bottom: number
@@ -107,28 +102,6 @@ async function dismiss(page: Page, card: Locator): Promise<void> {
   await expect.poll(async () => (await readCard(card)).state).toBe('idle')
 }
 
-const near = (a: number, b: number) => Math.abs(a - b) <= TOLERANCE
-
-// What "adjacent or pinned" means in pixels. Returns a reason when it does not
-// hold so a failing sweep row says why.
-function placementProblem(card: CardGeometry, sel: Rect, vp: { width: number; height: number }): string | null {
-  if (card.top < -TOLERANCE || card.bottom > vp.height + TOLERANCE) return `card leaves the viewport (${card.top}..${card.bottom} of ${vp.height})`
-  switch (card.placement) {
-    case 'below':
-      return near(card.top, sel.bottom + GAP) ? null : `below but gap is ${card.top - sel.bottom}`
-    case 'above':
-      return near(card.bottom, sel.top - GAP) ? null : `above but gap is ${sel.top - card.bottom}`
-    case 'beside':
-      return near(card.left, sel.right + GAP) || near(card.right, sel.left - GAP) ? null : `beside but not touching the text horizontally`
-    case 'pinned':
-      return near(card.bottom, vp.height - MARGIN) && near(card.right, vp.width - MARGIN)
-        ? null
-        : `pinned but at ${card.right}x${card.bottom} of ${vp.width}x${vp.height}`
-    default:
-      return `unexpected placement ${card.placement}`
-  }
-}
-
 async function expectAdjacentOrPinned(page: Page, card: Locator, label: string): Promise<CardGeometry> {
   const [geom, sel, vp] = await Promise.all([readCard(card), readSelection(page), viewportOf(page)])
   expect(placementProblem(geom, sel, vp), label).toBeNull()
@@ -155,7 +128,11 @@ test('anchored: adjacent to the text or pinned, across viewport heights and both
   ]) {
     const vp = await setViewport(page, width!, height!)
     for (const resultDetail of ['basic', 'advanced'] as const) {
+      // Re-load after changing the mode so the content script reads it at
+      // startup rather than racing storage.onChanged.
       await setSettings(context, { resultDetail })
+      await page.reload()
+      await page.waitForLoadState('domcontentloaded')
       for (const fraction of [0.15, 0.35, 0.55, 0.85]) {
         await selectAt(page, '#c-plain .t', fraction)
         const card = await classify(context, page)
@@ -205,9 +182,9 @@ test('anchored: follows the text on scroll, hides when it leaves, and comes back
 
 test('anchored: a window resize re-places the card, adjacent or pinned, never over the text', async ({ context }) => {
   const page = await context.newPage()
+  await setSettings(context, { resultDetail: 'advanced' })
   await openTorturePage(page)
   await setViewport(page, 960, 941)
-  await setSettings(context, { resultDetail: 'advanced' })
 
   await selectAt(page, '#c-plain .t', 0.35)
   const card = await classify(context, page)
@@ -222,9 +199,9 @@ test('anchored: a window resize re-places the card, adjacent or pinned, never ov
 
 test('pinned setting: bottom-right corner, and a scroll leaves it there', async ({ context }) => {
   const page = await context.newPage()
+  await setSettings(context, { cardPlacement: 'pinned', resultDetail: 'basic' })
   await openTorturePage(page)
   await setViewport(page, 1280, 800)
-  await setSettings(context, { cardPlacement: 'pinned', resultDetail: 'basic' })
 
   await selectAt(page, '#c-plain .t', 0.15)
   const card = await classify(context, page)
@@ -263,9 +240,9 @@ test('no anchor: textarea and iframe selections pin to the corner instead of a c
 
 test('top layer: transformed and contained ancestors, an overlapping popover, and a modal dialog', async ({ context }) => {
   const page = await context.newPage()
+  await setSettings(context, { resultDetail: 'basic', theme: 'dark' })
   await openTorturePage(page)
   await setViewport(page, 1280, 941)
-  await setSettings(context, { resultDetail: 'basic', theme: 'dark' })
 
   for (const selector of ['#xform .t', '#containpaint .t']) {
     await selectAt(page, selector, 0.15)
@@ -305,8 +282,8 @@ test('top layer: transformed and contained ancestors, an overlapping popover, an
     scale: 'css',
   })
   const { data } = await sharp(png).raw().toBuffer({ resolveWithObject: true })
-  const pixel = [data[0], data[1], data[2]]
-  for (let i = 0; i < 3; i++) expect(Math.abs(pixel[i]! - DARK_CARD_BG[i]!), `pixel ${pixel}`).toBeLessThanOrEqual(8)
+  const pixel = [data[0]!, data[1]!, data[2]!]
+  expect(isCardBackground(pixel, 'dark'), `pixel ${pixel} is not the dark card background`).toBe(true)
 })
 
 test('anchored: opening the advanced drawer where it no longer fits pins the card, and it stays pinned', async ({ context }) => {
@@ -332,4 +309,15 @@ test('anchored: opening the advanced drawer where it no longer fits pins the car
   const after = await readCard(card)
   expect(after.placement).toBe('pinned')
   expect(after.top).toBe(pinned.top)
+
+  // Closing the drawer is a fresh decision: the smaller card fits below its
+  // text again, so it goes back there rather than staying latched in the
+  // corner.
+  await page.mouse.wheel(0, -100)
+  await expect.poll(async () => (await readSelection(page)).bottom).toBeGreaterThan(0.45 * 720 - 10)
+  await card.evaluate((host) =>
+    host.shadowRoot!.querySelector<HTMLButtonElement>('[data-testid="mode-toggle"]')!.click(),
+  )
+  await expect.poll(async () => (await readCard(card)).placement).toBe('below')
+  await expectAdjacentOrPinned(page, card, 'basic again')
 })

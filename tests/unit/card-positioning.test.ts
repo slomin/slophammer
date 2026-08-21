@@ -77,7 +77,9 @@ describe('placeCard — when nothing adjacent fits', () => {
 
   it('shifts into the viewport while tracking a scroll, rather than jumping to the corner', () => {
     const pos = placeCard({ selection: sel, viewport: vp, card: basic, lastResort: 'shift' })
-    expect(pos.placement).toBe('below')
+    // Its own token: a shifted card is not below anything, and may overlap
+    // the text, so nothing may read it as an adjacent placement.
+    expect(pos.placement).toBe('shifted')
     if (pos.placement === 'hidden') return
     expect(pos.top).toBeGreaterThanOrEqual(CARD_MARGIN)
     expect(pos.top + basic.height + CARD_MARGIN).toBeLessThanOrEqual(vp.height)
