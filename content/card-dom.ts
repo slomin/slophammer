@@ -55,11 +55,51 @@ export interface CardElements {
   refs: CardRefs
 }
 
+type PopoverHost = HTMLElement & { showPopover?: () => void; hidePopover?: () => void }
+
+function supportsPopover(): boolean {
+  return typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
+}
+
 function applyHostReset(host: HTMLElement): void {
   host.setAttribute(CARD_HOST_ATTR, '')
+  // `manual`, never `auto`: auto popovers light-dismiss on any outside click and
+  // close one another, and the card manages its own dismissal. The inline
+  // resets below also defeat the UA's [popover] styles (inset, border, padding,
+  // Canvas background), measured: the promoted host is 0x0 and transparent.
+  if (supportsPopover()) host.setAttribute('popover', 'manual')
   host.style.setProperty('all', 'initial', 'important')
   host.style.setProperty('visibility', 'visible', 'important')
   host.style.setProperty('display', 'block', 'important')
+}
+
+// The top layer paints above every z-index on the page — <dialog>, [popover]
+// and fullscreen all live there — and a top-layer element's position:fixed is
+// measured from the viewport no matter what its ancestors do with transform,
+// filter, overflow or contain. Promoting the host is what keeps the card
+// visible on pages that use those. Both helpers are no-ops where the Popover
+// API is missing, so the z-index path still applies there.
+export function promoteToTopLayer(host: HTMLElement): void {
+  const h = host as PopoverHost
+  if (typeof h.showPopover !== 'function' || !h.isConnected) return
+  if (h.matches(':popover-open')) return
+  try {
+    h.showPopover()
+  } catch {
+    // InvalidStateError while another popover is mid-toggle. The card is still
+    // in the DOM with its z-index; losing the top layer is not worth an error.
+  }
+}
+
+export function demoteFromTopLayer(host: HTMLElement): void {
+  const h = host as PopoverHost
+  if (typeof h.hidePopover !== 'function' || !h.isConnected) return
+  if (!h.matches(':popover-open')) return
+  try {
+    h.hidePopover()
+  } catch {
+    // See promoteToTopLayer.
+  }
 }
 
 function el<T extends HTMLElement>(

@@ -113,6 +113,9 @@ function rerenderSettings(settings: Settings) {
     onThemeChange: (value) => {
       settingsStore.set({ theme: value }).catch((err) => log.error('set theme failed', err))
     },
+    onCardPlacementChange: (value) => {
+      settingsStore.set({ cardPlacement: value }).catch((err) => log.error('set cardPlacement failed', err))
+    },
   })
 }
 

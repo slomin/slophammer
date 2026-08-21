@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { renderPlacementFrame, renderPlacementPage } from './placement-page.mjs'
 
 const PORT = 8765
 const HOSTILE_CSS = `
@@ -212,17 +213,24 @@ const server = http.createServer((req, res) => {
     res.end()
     return
   }
-  if (url.pathname !== '/' && url.pathname !== '/hostile') {
+  const ROUTES = {
+    '/': () => renderPage(),
+    '/hostile': () => renderPage({ hostile: true }),
+    '/placement': renderPlacementPage,
+    '/placement/frame': renderPlacementFrame,
+  }
+  const render = ROUTES[url.pathname]
+  if (!render) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not found')
     return
   }
 
-  const html = renderPage({ hostile: url.pathname === '/hostile' })
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-  res.end(html)
+  res.end(render())
 })
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`test page: http://127.0.0.1:${PORT}/`)
   console.log(`hostile page: http://127.0.0.1:${PORT}/hostile`)
+  console.log(`placement page: http://127.0.0.1:${PORT}/placement`)
 })

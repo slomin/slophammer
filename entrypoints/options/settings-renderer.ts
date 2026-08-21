@@ -1,8 +1,9 @@
-import type { ResultDetail, Settings, ThemePreference } from '@/settings/settings-types'
+import type { CardPlacement, ResultDetail, Settings, ThemePreference } from '@/settings/settings-types'
 
 export interface SettingsHandlers {
   onResultDetailChange(value: ResultDetail): void
   onThemeChange(value: ThemePreference): void
+  onCardPlacementChange(value: CardPlacement): void
 }
 
 type ResultSwatch = 'h' | 'l' | 'hv' | 'a'
@@ -16,6 +17,12 @@ interface ResultDetailOption {
 
 interface ThemeOption {
   value: ThemePreference
+  label: string
+  description: string
+}
+
+interface CardPlacementOption {
+  value: CardPlacement
   label: string
   description: string
 }
@@ -35,6 +42,20 @@ const RESULT_DETAIL_OPTIONS: ResultDetailOption[] = [
   },
 ]
 
+const CARD_PLACEMENT_OPTIONS: CardPlacementOption[] = [
+  {
+    value: 'anchored',
+    label: 'Next to the selected text',
+    description:
+      'The card appears beside the text you checked and follows it as you scroll. When there is no room next to it, the card goes to the bottom-right corner instead.',
+  },
+  {
+    value: 'pinned',
+    label: 'Pinned to the bottom-right corner',
+    description: 'The card always appears in the bottom-right corner of the window, wherever the text is.',
+  },
+]
+
 const THEME_OPTIONS: ThemeOption[] = [
   { value: 'system', label: 'System', description: 'Follow your OS appearance.' },
   { value: 'light', label: 'Light', description: 'Warm paper background with high-contrast ink.' },
@@ -44,7 +65,37 @@ const THEME_OPTIONS: ThemeOption[] = [
 export function renderSettings(root: HTMLElement, settings: Settings, handlers: SettingsHandlers): void {
   root.innerHTML = ''
   root.appendChild(buildResultDetailGroup(settings.resultDetail, handlers.onResultDetailChange))
+  root.appendChild(buildCardPlacementGroup(settings.cardPlacement, handlers.onCardPlacementChange))
   root.appendChild(buildThemeGroup(settings.theme, handlers.onThemeChange))
+}
+
+function buildCardPlacementGroup(selected: CardPlacement, onChange: (value: CardPlacement) => void): HTMLElement {
+  const wrap = document.createElement('fieldset')
+  wrap.className = 'settings-group'
+  wrap.dataset.testid = 'group-card-placement'
+  wrap.appendChild(legend('Card position'))
+
+  for (const option of CARD_PLACEMENT_OPTIONS) {
+    const row = buildRow({
+      groupName: 'card-placement',
+      value: option.value,
+      selected: selected === option.value,
+      onSelect: () => onChange(option.value),
+    })
+
+    const labelLine = document.createElement('span')
+    labelLine.className = 'settings-row-label'
+    labelLine.textContent = option.label
+
+    const desc = document.createElement('span')
+    desc.className = 'settings-row-desc'
+    desc.textContent = option.description
+
+    row.text.appendChild(labelLine)
+    row.text.appendChild(desc)
+    wrap.appendChild(row.root)
+  }
+  return wrap
 }
 
 function buildResultDetailGroup(selected: ResultDetail, onChange: (value: ResultDetail) => void): HTMLElement {

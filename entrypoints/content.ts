@@ -1,11 +1,12 @@
 import { createClassifyWatchdog } from '@/content/classify-watchdog'
-import { buildCard, type CardElements } from '@/content/card-dom'
+import { buildCard, demoteFromTopLayer, promoteToTopLayer, type CardElements } from '@/content/card-dom'
 import { renderState } from '@/content/card-state'
 import { formatResultSummary } from '@/content/result-summary'
 import {
-  computeCardPosition,
   correctedOffsets,
-  fallbackCardPosition,
+  pinnedCardPosition,
+  placeCard,
+  type CardPosition,
 } from '@/content/card-positioning'
 import {
   CLASSIFY_TIMEOUT_MS,
@@ -27,10 +28,20 @@ import { resolveTheme } from '@/settings/resolve-theme'
 import { createChromeSettingsStore } from '@/settings/settings-store'
 import { DEFAULT_SETTINGS, type Settings } from '@/settings/settings-types'
 
-function captureSelectionRect(): DOMRect | null {
+// A Range rather than a rect: the DOM keeps a Range's boundary points current
+// and getBoundingClientRect() re-measures on every call, so the same anchor can
+// be followed through scrolls, resizes and late layout without going stale.
+function captureSelectionRange(): Range | null {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
-  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  const range = sel.getRangeAt(0).cloneRange()
+  return anchorRect(range) ? range : null
+}
+
+// Null when the range has nothing to measure: a selection the top frame cannot
+// see (iframe, textarea), or one whose nodes the page has since rewritten.
+function anchorRect(range: Range): DOMRect | null {
+  const rect = range.getBoundingClientRect()
   if (rect.width === 0 && rect.height === 0) return null
   return rect
 }
@@ -54,7 +65,7 @@ export default defineContentScript({
     const instanceKey = Symbol.for('slophammer.contentInstance')
     const world = globalThis as unknown as Record<symbol, { alive(): boolean } | undefined>
     if (world[instanceKey]?.alive()) return
-    world[instanceKey] = {
+    const me = {
       alive() {
         try {
           return Boolean(browser.runtime?.id)
@@ -63,6 +74,7 @@ export default defineContentScript({
         }
       },
     }
+    world[instanceKey] = me
 
     installErrorForwarding('content')
     const log = createLogger('content')
@@ -77,7 +89,15 @@ export default defineContentScript({
 
     let state: CardState = initialCardState
     let card: CardElements | null = null
-    let lastRect: DOMRect | null = null
+    // Cleared on dismiss: a live Range pins its boundary nodes in memory and
+    // costs the page a boundary-point update on every DOM mutation.
+    let anchor: Range | null = null
+    // The outcome of the last fresh placement decision. While the card is
+    // merely tracking a scroll it must not leave the corner for the text and
+    // back again as the text drifts through positions that fit; the next
+    // fresh decision (new card, content or size change, resize, setting)
+    // recomputes it.
+    let pinnedForThisCard = false
     // Once the user has dragged the card, `position()` must stop yanking it
     // back under the selection. Reset on each new classify:started so a fresh
     // selection gets the default auto-placement.
@@ -96,8 +116,13 @@ export default defineContentScript({
       .catch((err) => log.error('settings load failed', err))
 
     settingsStore.subscribe((next) => {
+      const placementChanged = next.cardPlacement !== settings.cardPlacement
       settings = next
-      if (card) applyTheme(card)
+      if (!card) return
+      applyTheme(card)
+      // Only the placement setting moves a showing card; a theme change must
+      // not relocate it.
+      if (placementChanged && state.kind !== 'idle') position(card, 'place')
     })
 
     function applyTheme(c: CardElements) {
@@ -167,13 +192,13 @@ export default defineContentScript({
         window.addEventListener('mouseup', onUp, true)
       })
 
-      // Re-clamp the card to the viewport whenever its size changes, so that
-      // opening the advanced drawer (or restoring from minimised) near the
-      // bottom of the page doesn't push the lower rows off-screen. Skipped
+      // Re-place the card whenever its size changes — the loading card
+      // becoming the result, the advanced drawer opening, minimise — so a card
+      // that no longer fits where it was goes somewhere it does fit. Skipped
       // once the user has taken manual control via drag.
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
-          if (state.kind !== 'idle') position(c)
+          if (state.kind !== 'idle') position(c, 'place')
         })
         ro.observe(c.refs.root)
       }
@@ -257,26 +282,68 @@ export default defineContentScript({
     // normal page.
     let containingBlockOffset = { top: 0, left: 0 }
 
-    function position(c: CardElements) {
+    // 'place' decides from scratch — a new card, one whose content or size
+    // changed, a resize, a setting. 'track' follows the text through a scroll
+    // and must never move a card that is already on screen to the corner.
+    type PositionReason = 'place' | 'track'
+
+    function position(c: CardElements, reason: PositionReason) {
       if (isDragged) return
       const viewport = currentViewport()
       const card = {
         width: c.refs.root.offsetWidth || 320,
         height: c.refs.root.offsetHeight || 180,
       }
-      // No rect means the selection isn't visible to this frame — an iframe
-      // selection, most often. Anchor to the viewport rather than leaving the
-      // card at its default offsets, which put it below the fold.
-      const p = lastRect
-        ? computeCardPosition({ selection: toSelectionRect(lastRect), viewport, card })
-        : fallbackCardPosition({ viewport, card })
+      const rect = anchor ? anchorRect(anchor) : null
+      let p: CardPosition
+      if (settings.cardPlacement === 'pinned') {
+        p = pinnedCardPosition({ viewport, card })
+      } else if (!rect) {
+        // No rect means the selection isn't visible to this frame — an iframe
+        // or textarea selection, most often — or the page has rewritten the
+        // nodes the range pointed at. A new card pins rather than sitting at
+        // default offsets below the fold; a tracked card holds where it is,
+        // since a node that is momentarily boxless (content-visibility, a
+        // display toggle) would otherwise flick it to the corner and back.
+        if (reason === 'track') return
+        p = pinnedCardPosition({ viewport, card })
+      } else if (reason === 'track' && pinnedForThisCard) {
+        p = pinnedCardPosition({ viewport, card })
+      } else {
+        p = placeCard({
+          selection: toSelectionRect(rect),
+          viewport,
+          card,
+          lastResort: reason === 'place' ? 'pinned' : 'shift',
+        })
+        if (reason === 'place') pinnedForThisCard = p.placement === 'pinned'
+      }
+
+      if (p.placement === 'hidden') {
+        c.refs.root.dataset.hidden = 'true'
+        c.refs.root.dataset.placement = 'hidden'
+        return
+      }
+      delete c.refs.root.dataset.hidden
+      c.refs.root.dataset.placement = p.placement
+
+      // A tracking frame writes and returns: the containing-block offset was
+      // measured by the last fresh placement and does not change with scroll,
+      // and a read-back here would force a layout on every scrolled frame.
+      if (reason === 'track') {
+        c.refs.root.style.top = `${p.top + containingBlockOffset.top}px`
+        c.refs.root.style.left = `${p.left + containingBlockOffset.left}px`
+        return
+      }
 
       // If an ancestor carries a transform/filter/perspective it becomes the
       // containing block for position:fixed, and these offsets are measured
       // from the document instead of the viewport. Measure where the card
       // actually landed and correct by the difference. Repeat a couple of
       // times: a pure translation converges immediately, but a scaled ancestor
-      // needs another pass because the correction is scaled too.
+      // needs another pass because the correction is scaled too. In the top
+      // layer this converges on the first pass; it remains for browsers
+      // without the Popover API.
       let applied = { top: p.top, left: p.left }
       for (let attempt = 0; attempt < 3; attempt++) {
         c.refs.root.style.top = `${applied.top}px`
@@ -320,6 +387,16 @@ export default defineContentScript({
 
       if (state === prev) return
       const c = mountCard()
+      // The top layer is a stack and the last element shown is on top, so on
+      // every change the card leaves and re-enters it, to sit above anything
+      // the page opened since — including during the seconds of inference
+      // between the loading card and the result.
+      demoteFromTopLayer(c.host)
+      if (state.kind === 'idle') {
+        anchor = null
+      } else {
+        promoteToTopLayer(c.host)
+      }
       if (action.type === 'classify:started') {
         c.refs.root.dataset.view = 'full'
         const startMode = settings.resultDetail
@@ -329,8 +406,43 @@ export default defineContentScript({
         isDragged = false
       }
       renderState(c, state)
-      if (state.kind !== 'idle') position(c)
+      if (state.kind !== 'idle') position(c, 'place')
     }
+
+    // Follow the text. Scroll events do not bubble, so listen in the capture
+    // phase to see inner scroll containers too; coalesce to one placement per
+    // frame, with a pending 'place' outranking a 'track'. A scroll tracks; a
+    // resize is a discrete act like opening the drawer, so it decides afresh
+    // rather than leaving a shifted card over its text. Idle is the common
+    // case and returns before doing any work. An instance that has been
+    // superseded or orphaned (its host swept by a newer instance, or the
+    // extension context gone) lets go of the window rather than positioning
+    // a detached element every scrolled frame.
+    let scheduled: PositionReason | null = null
+    const onScroll = () => schedulePosition('track')
+    const onResize = () => schedulePosition('place')
+    function releaseWindow() {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
+    function schedulePosition(reason: PositionReason) {
+      if (state.kind === 'idle' || !card || isDragged) return
+      if (world[instanceKey] !== me || !me.alive() || !card.host.isConnected) {
+        releaseWindow()
+        return
+      }
+      if (scheduled === 'place') return
+      const firstInFrame = scheduled === null
+      scheduled = reason
+      if (!firstInFrame) return
+      requestAnimationFrame(() => {
+        const why = scheduled ?? 'track'
+        scheduled = null
+        if (state.kind !== 'idle' && card && !isDragged) position(card, why)
+      })
+    }
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    window.addEventListener('resize', onResize, { passive: true })
 
     function showToast(text: string) {
       const host = document.createElement('div')
@@ -375,13 +487,16 @@ export default defineContentScript({
         sendResponse({ alive: true })
         return false
       }
+      // A new card gets a fresh anchor and a fresh placement decision.
       if (isSelectionTooShort(m)) {
-        lastRect = captureSelectionRect()
+        anchor = captureSelectionRange()
+        pinnedForThisCard = false
         applyAction(m)
         return false
       }
       if (isClassifyStarted(m)) {
-        lastRect = captureSelectionRect()
+        anchor = captureSelectionRange()
+        pinnedForThisCard = false
         applyAction({ ...m, startedAtMs: performance.now() })
         return false
       }

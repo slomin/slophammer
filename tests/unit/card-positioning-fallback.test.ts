@@ -2,33 +2,36 @@ import { describe, expect, it } from 'vitest'
 import {
   CARD_MARGIN,
   correctedOffsets,
-  fallbackCardPosition,
+  pinnedCardPosition,
   POSITION_TOLERANCE_PX,
 } from '@/content/card-positioning'
 
 const viewport = { width: 1024, height: 768 }
 const card = { width: 320, height: 180 }
 
-// A selection made inside an iframe is not visible to the top frame, so there
-// is no rect to anchor against. Previously the card kept its default offsets
-// and rendered below the fold; it must land somewhere on screen instead.
-describe('fallbackCardPosition — no selection rect available', () => {
-  it('anchors to the top-right of the viewport', () => {
-    const pos = fallbackCardPosition({ viewport, card })
-    expect(pos.top).toBe(CARD_MARGIN)
-    expect(pos.left).toBe(viewport.width - card.width - CARD_MARGIN)
+// The pinned position is both a setting and the fallback for every selection
+// the card cannot anchor to — an iframe or textarea selection the top frame
+// cannot see, or a dead band where nothing adjacent fits. Previously those
+// landed top-right, a corner nobody chose.
+describe('pinnedCardPosition', () => {
+  it('parks the card in the bottom-right corner', () => {
+    expect(pinnedCardPosition({ viewport, card })).toEqual({
+      placement: 'pinned',
+      top: viewport.height - card.height - CARD_MARGIN,
+      left: viewport.width - card.width - CARD_MARGIN,
+    })
   })
 
   it('always lands inside the viewport', () => {
-    const pos = fallbackCardPosition({ viewport, card })
+    const pos = pinnedCardPosition({ viewport, card })
     expect(pos.top).toBeGreaterThanOrEqual(0)
     expect(pos.left).toBeGreaterThanOrEqual(0)
     expect(pos.top + card.height).toBeLessThanOrEqual(viewport.height)
     expect(pos.left + card.width).toBeLessThanOrEqual(viewport.width)
   })
 
-  it('clamps to the margin when the card is wider than the viewport', () => {
-    const pos = fallbackCardPosition({ viewport: { width: 200, height: 400 }, card })
+  it('clamps to the margin when the card is larger than the viewport', () => {
+    const pos = pinnedCardPosition({ viewport: { width: 200, height: 100 }, card })
     expect(pos.left).toBe(CARD_MARGIN)
     expect(pos.top).toBe(CARD_MARGIN)
   })

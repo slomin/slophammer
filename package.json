@@ -23,7 +23,8 @@
     "postinstall": "wxt prepare",
     "debug": "node scripts/debug-extension.mjs",
     "qa:runtime": "node scripts/qa-runtime.mjs",
-    "check:package": "node scripts/check-package.mjs"
+    "check:package": "node scripts/check-package.mjs",
+    "qa:placement": "node scripts/qa-placement.mjs"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {

@@ -23,7 +23,8 @@ function coerce(raw: unknown): Settings {
   const resultDetail = r.resultDetail === 'advanced' ? 'advanced' : 'basic'
   const theme =
     r.theme === 'light' ? 'light' : r.theme === 'dark' ? 'dark' : 'system'
-  return { resultDetail, theme }
+  const cardPlacement = r.cardPlacement === 'pinned' ? 'pinned' : 'anchored'
+  return { resultDetail, theme, cardPlacement }
 }
 
 export class SettingsStore implements SettingsStoreLike {
