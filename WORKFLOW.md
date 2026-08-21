@@ -42,7 +42,7 @@ SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test
 |---|---|
 | `pnpm chrome` | Launch Chrome for Testing with the extension loaded + CDP on `:9222`, using the reusable profile at `~/.slophammer-chrome-profile`. |
 | `pnpm chrome:real` | Same but with the daily Google Chrome binary on `:9223`. Note the restrictions in the "Stable Chrome" section below. |
-| `pnpm test-page` | Start an http server on `:8765` serving fixtures at `/` and a hostile-CSS repro page at `/hostile`. |
+| `pnpm test-page` | Start an http server on `:8765` serving fixtures at `/`, a hostile-CSS repro page at `/hostile`, and the placement torture page at `/placement`. |
 | `pnpm build` | Production WXT build → `.output/chrome-mv3/`. |
 | `pnpm release` | `pnpm build` + refresh `references/releases/current/{unpacked, *.zip, README.txt}`. Releases go into a single folder that overwrites on each run. |
 | `pnpm reload` | `pnpm release` + kill CfT + relaunch. Reliable SW refresh. |
@@ -53,6 +53,7 @@ SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test
 | `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
 | `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
 | `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
+| `pnpm qa:placement` | Measure where the result card lands on the placement torture page (`/placement`) with real inference: one PASS/FAIL row per fixture, a scroll-follow check, and a viewport sweep for the dead band. The same page is asserted without a model by `tests/e2e/card-placement.spec.ts`; this is the evidence run. |
 | `pnpm check:package` | Audit an **existing** `.output/chrome-mv3` — no symlinks, one ONNX Runtime WASM binary at `ort/`, every `ORT_RUNTIME_FILES` entry present, JavaScript under budget. Prints the build's timestamp and sizes. Build first; `pnpm release` runs it on the packed tree and deletes the zip if it fails. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
@@ -304,6 +305,9 @@ context-menu click
   result because Playwright can't click native context menus and the E2E
   profile has no model installed. Manual smoke via the context-menu is still
   required before a release, including the hostile local page.
+- `visibleToUser` from `CARD_SNAPSHOT` while a modal `<dialog>` is open. Every
+  node outside a modal is inert and fails hit testing, including a card that
+  is painted on top of it. Check paint (a screenshot pixel), not the hit test.
 - A green E2E run as proof the *pipeline* works. Those specs passed for months
   against a fake classifier that invented verdicts whenever no model was
   installed; the extension now fails loudly instead, and a spec guards it.
@@ -360,7 +364,34 @@ context-menu click
 - **Selections inside iframes have no rect in the top frame.** The content
   script only runs top-level, so `captureSelectionRect()` returned null,
   positioning was skipped entirely, and the card rendered below the fold.
-  Fix: fall back to a viewport-anchored placement.
+  Fix: fall back to a viewport-anchored placement — since #37, the same
+  bottom-right corner the `cardPlacement` setting pins to.
+- **The card was clamped to the top edge for any mid-screen selection.**
+  Placement tried below, then above, then clamped. With the advanced card
+  (501px) in a 941px window a selection in the middle fits neither, so the
+  card sat at the top edge 500px from its text; the band scales with card and
+  window height and sits where people read. Fix (#37): `placeCard` tries
+  below → above → beside-right → beside-left and, when nothing fits, a *new*
+  card pins to the corner and stays there until the next classification. A
+  card being tracked through a scroll shifts into view instead, so it never
+  jumps to the corner mid-scroll. The card follows a live `Range` on scroll
+  and resize and hides while the text is fully off screen — there was no
+  scroll listener before, and the ResizeObserver repositioned against a stale
+  rect. `pnpm qa:placement` and `tests/e2e/card-placement.spec.ts` gate it.
+- **`z-index: 2147483647` loses to the top layer.** A page's modal `<dialog>`,
+  `[popover]` or fullscreen element painted over the card. Fix (#37): the host
+  is a `popover="manual"` shown with `showPopover()`, which puts it in the top
+  layer — above every z-index, and measured from the viewport no matter what
+  an ancestor does with transform/filter/overflow/contain, so the
+  measure-and-correct loop below now converges on its first pass and remains
+  only for browsers without the Popover API. Two ceilings, both measured:
+  the top layer is a stack and the last element shown is on top, so a dialog
+  opened *after* the card covers it (a new card re-enters the top layer to
+  get back on top); and a modal dialog makes every node outside it **inert**,
+  by specification, so above a modal the card is painted but cannot be
+  clicked and `elementFromPoint` reports the dialog. That is why the dialog
+  row of `qa:placement` and the E2E spec check a screenshot pixel, not a hit
+  test — `visibleToUser` cannot be true there for any overlay.
 - **A failure action that is right in one state can lie in another.** Replacing
   an installed model reuses the manual-install path, whose non-`.zip` rejection
   dispatches `install-failed`. From `empty` that correctly shows the error card;
@@ -431,7 +462,8 @@ install/               zip orchestrator + OPFS writer + fflate reader + file rec
 llm/                   classifier interface, Fake + Onnx impls, contract, fp16, token prep, opfs reader
 messaging/             protocol types + discriminated-union guards + logger with error forwarding
 scripts/               launch-chrome, launch-real-chrome, release, reload, install-cft,
-                       generate-icons, serve-test-page, qa-setup, qa-runtime,
+                       generate-icons, serve-test-page + placement-page (torture fixtures,
+                       shared with the E2E spec), qa-setup, qa-runtime, qa-placement,
                        debug-extension, check-package (CLI) + package-audit (rules)
 tests/unit/            Vitest specs — one per pure module
 tests/fixtures/        Recorded data the specs assert against (350M token vectors)
