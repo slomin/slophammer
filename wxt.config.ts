@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, rmSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { PRODUCT_NAME } from './shared/product'
-import { ORT_WEBGPU_RUNTIME_FILES } from './shared/ort-runtime'
+import { ORT_RUNTIME_FILES } from './shared/ort-runtime'
 
 function copyOrtRuntime(): void {
   const require = createRequire(import.meta.url)
@@ -13,7 +13,7 @@ function copyOrtRuntime(): void {
   rmSync(destDir, { recursive: true, force: true })
   mkdirSync(destDir, { recursive: true })
 
-  for (const f of ORT_WEBGPU_RUNTIME_FILES) {
+  for (const f of ORT_RUNTIME_FILES) {
     cpSync(resolve(ortDist, f), resolve(destDir, f), { force: true })
   }
 }
@@ -24,9 +24,8 @@ export default defineConfig({
   srcDir: '.',
   vite: () => ({
     build: {
-      // The tokenizer and WebGPU session bootstrap intentionally share one
-      // offscreen entry chunk. Keep the ceiling tight so unexpected growth
-      // still warns while the audited ~651 kB runtime and migration port do not.
+      // The tokenizer and provider bootstrap live in the classifier worker.
+      // Keep the ceiling tight so unexpected runtime growth remains visible.
       chunkSizeWarningLimit: 655,
     },
   }),
@@ -47,6 +46,15 @@ export default defineConfig({
     host_permissions: ['<all_urls>'],
     content_security_policy: {
       extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    },
+    // CPU/WASM fallback may use a small, bounded thread pool. `credentialless`
+    // preserves cross-origin isolation without requiring public model hosts to
+    // emit CORP on every metadata response; hosted install is covered by QA.
+    cross_origin_embedder_policy: {
+      value: 'credentialless',
+    },
+    cross_origin_opener_policy: {
+      value: 'same-origin',
     },
     web_accessible_resources: [
       {

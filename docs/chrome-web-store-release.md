@@ -11,7 +11,8 @@ This is the operational runbook for SlopHammer’s Chrome Web Store package. The
 - Download size: `215720009` bytes; unpacked model files are about 230 MB.
 - SHA-256/LFS OID: `3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e`.
 - Input floor: 40 words.
-- Runtime: local, WebGPU-only. No CPU/WASM execution-provider fallback is claimed for v1.
+- Runtime: local WebGPU preferred, with an automatic packaged CPU/WASM fallback when
+  WebGPU is unavailable or cannot initialize. CPU inference can be materially slower.
 - Results: the original Human/AI presentation with a confidence chip, prominent rounded winning-side percentage, explanatory sentence, and binary Human/AI bar.
 - Copy and Share export only the detector heading and raw four-bucket distribution. General limitations remain in options and support guidance rather than the result card.
 
@@ -30,17 +31,39 @@ Relevant Chrome documentation:
 ## Required verification before #24
 
 1. Run `pnpm test`, `pnpm typecheck`, `pnpm build`, and `pnpm test:e2e`.
-2. Test a fresh hosted install and successful 40-word classification in Chrome with WebGPU.
+2. Test a fresh hosted install and successful 40-word classification in current Chrome
+   with WebGPU; confirm diagnostics identify `webgpu`.
 3. Confirm all five zero-width characters leave the result unchanged.
 4. Confirm 39 words are rejected and 40 words start classification.
 5. Upgrade a populated pre-v1 profile and verify old local/session storage and the retired OPFS model are removed before the pinned 350M install.
 6. Terminate Chrome during migration, restart, and confirm the OPFS journal resumes the job without overlapping installs or reviving the retired model.
 7. Exercise Human/AI and leaning results, confidence bands, the prominent score and binary bar, Basic/Advanced, Advanced timing, themes, minimisation, Copy/Share, hostile CSS, and a real website.
-8. Verify unsupported hardware receives a clear WebGPU requirement.
-9. Regenerate Store assets and prove their visible name is exactly `SlopHammer`.
-10. Run `pnpm release`; inspect the ZIP root, icons, permissions, CSP, bundled runtime files, absence of model weights, and absence of development-only files.
+8. In a separate browser profile, make WebGPU genuinely unavailable and verify the
+   same installed model classifies through local CPU/WASM. Confirm diagnostics identify
+   `wasm`, expected fallback emits no warning/error, and selected text never leaves the
+   device.
+9. Inject or otherwise exercise a WebGPU session-initialization failure while the API
+   is present; verify CPU/WASM starts cleanly. Exercise a both-provider failure and
+   confirm the user sees actionable browser, memory, or model recovery guidance while
+   diagnostics retain both provider causes.
+10. Compare representative fixed inputs on WebGPU and CPU/WASM. Confirm identical
+    preprocessing/token metadata and materially consistent distributions, decision
+    scores, and verdicts without changing the pinned calibration contract.
+11. Throttle the CPU fallback on the classifier-worker target so a run crosses the
+    normal card watchdog. Confirm loading remains alive, the eventual result is
+    accepted, repeated requests reuse one session, and concurrent tabs remain FIFO
+    serialized. Record cold and warm timings without promising equivalent performance
+    on a particular Windows laptop or Chromebook.
+12. Restart the fallback browser profile and confirm the installed model remains in
+    OPFS and the CPU session is recreated lazily. If practical, exercise the low-memory
+    path and verify that closing tabs/apps and retrying is the stated recovery.
+13. Regenerate Store assets and prove their visible name is exactly `SlopHammer`.
+14. Run `pnpm release`; inspect the ZIP root, icons, permissions, CSP, packaged worker
+    and ONNX Runtime files, absence of model weights, and absence of development-only
+    files. Confirm no runtime JavaScript, worker, MJS, or WASM is fetched remotely.
 
-Do not run a 50-row corpus parity gate or a WASM evaluation for this release branch.
+No 50-row corpus parity gate is required. The targeted WebGPU/CPU-WASM equivalence,
+fallback, timeout, lifecycle, and package checks above are required.
 
 ## Submission sequence (#24)
 

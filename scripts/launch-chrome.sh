@@ -11,7 +11,13 @@ fi
 BIN="$(cat "$BIN_PATH_FILE")"
 
 EXT="$PWD/.output/chrome-mv3"
-PROFILE="$HOME/.slophammer-chrome-profile"
+PROFILE="${SLOPHAMMER_CHROME_PROFILE:-$HOME/.slophammer-chrome-profile}"
+CDP_PORT="${SLOPHAMMER_CDP_PORT:-9222}"
+
+if ! [[ "$CDP_PORT" =~ ^[0-9]+$ ]] || [ "$CDP_PORT" -lt 1 ] || [ "$CDP_PORT" -gt 65535 ]; then
+  echo "SLOPHAMMER_CDP_PORT must be an integer from 1 to 65535 (received: $CDP_PORT)." >&2
+  exit 1
+fi
 
 if [ ! -d "$EXT" ]; then
   echo "Extension not built. Run: pnpm build  (or pnpm dev)" >&2
@@ -22,10 +28,10 @@ echo "Launching Chrome for Testing"
 echo "  binary : $BIN"
 echo "  ext    : $EXT"
 echo "  profile: $PROFILE"
-echo "  CDP    : http://localhost:9222"
+echo "  CDP    : http://localhost:$CDP_PORT"
 
 exec "$BIN" \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port="$CDP_PORT" \
   --user-data-dir="$PROFILE" \
   --load-extension="$EXT" \
   --disable-extensions-except="$EXT" \

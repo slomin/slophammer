@@ -168,7 +168,10 @@ export default defineBackground(() => {
       sendTab(msg.tabId, msg)
     },
     'model:status': async (msg: ModelStatusMessage) => {
-      log.debug('router: model:status → broadcast', { status: msg.status })
+      log.debug('router: model:status → broadcast', {
+        status: msg.status,
+        provider: msg.provider,
+      })
       const tabs = await chrome.tabs.query({})
       for (const t of tabs) {
         if (t.id != null) sendTab(t.id, msg)

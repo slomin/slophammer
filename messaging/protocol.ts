@@ -1,4 +1,5 @@
 import type { ClassifyResult } from '@/llm/classify-result'
+import type { RuntimeExecutionProvider } from '@/llm/execution-provider'
 import type { MigrationState } from '@/migration/state'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -64,6 +65,7 @@ export interface ModelStatusMessage {
   status: ModelStatus
   progress?: number
   error?: string
+  provider?: RuntimeExecutionProvider
 }
 
 export interface ModelInstalledMessage {

@@ -27,6 +27,9 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm test:e2e` | Playwright E2E against CfT. |
 | `pnpm typecheck` | `tsc --noEmit`. |
 | `pnpm setup:chrome` | One-time: install Chrome for Testing into `./chrome-for-testing/`. |
+| `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
+| `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
+| `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
@@ -42,6 +45,75 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
    - `http://127.0.0.1:8765/hostile`
    - a real site such as Reddit when validating cross-site CSS resilience
 
+## Runtime QA (execution providers)
+
+Two commands, one for each provider. `pnpm qa:runtime` checks WebGPU evidence,
+cold start, the chosen provider and its fallback reason, repeat runs on one
+session, 4-tab concurrency, a burst backlog, the hostile-CSS page, the live
+dispose/rebuild path, and console hygiene — then prints PASS/FAIL per check and
+exits non-zero if any failed.
+
+```
+pnpm qa                            # WebGPU available
+pnpm qa:runtime --expect webgpu
+
+pnpm qa --no-webgpu                # WebGPU genuinely unavailable
+pnpm qa:runtime --expect wasm
+```
+
+**Provider equivalence** is a two-step gate: record every fixture's verdict on
+one provider, then assert the other reproduces it. Verdicts must match exactly;
+the rounded distribution is allowed 1pp of drift, because the card rounds and
+the two providers are not required to agree bit-for-bit.
+
+```
+pnpm qa              && pnpm qa:runtime --expect webgpu --record /tmp/webgpu.json
+pnpm qa --no-webgpu  && pnpm qa:runtime --expect wasm   --compare /tmp/webgpu.json
+```
+
+The suite also exercises the live rebuild path (`model:load` → dispose → new
+session → classify), so the machinery the timeout-recovery paths depend on is
+proven in a real browser rather than only against fakes.
+
+It runs in **~18s** and is deterministic: every check is local, so there is no
+network in the default path. Two checks are opt-in because they are slow or
+flaky, and both are already covered elsewhere:
+
+- `--watchdog` waits out the card's real deadline in-browser (~54s). The timing
+  rules themselves are covered deterministically by
+  `tests/unit/classify-watchdog.test.ts` with fake timers, so this only
+  re-confirms in a real browser what that test already proves.
+- `--site <url>` smokes a real site. It needs the network, which makes it both
+  the slowest step and the only genuinely flaky one — page weight and markup are
+  outside our control. The local `/hostile` fixture covers the same failure mode
+  deterministically. Run it before a release, not on every loop.
+
+**A crashed renderer is recovered, not reported as a failure.** Chrome's
+"Aw, Snap!" keeps the CDP target alive, so evaluating in it hangs — with a
+hard-coded 30s per call and a high failure threshold, a crash could never be
+detected inside a card budget and simply looked like a classification that never
+settled (measured: 60s of polling a dead tab). `waitForCard` now polls with a
+short per-call timeout, confirms with a health probe, and returns `crashed`
+within ~9s; the suite reloads the tab and retries the request once. Recovery
+navigates to the URL the tab was *opened* on: a crashed renderer reports
+`chrome-error://chromewebdata/` as its own `location.href`, so reloading "its own
+URL" lands straight back on the error page. `eval`/`send` accept a per-call
+timeout — rule 3 applies to every call, not once globally.
+
+**Keep it fast and deterministic.** Budgets are proportionate to measured times
+(1.2–1.8s warm on WebGPU, 2.4–3.0s on CPU/WASM), so a regression fails in
+seconds instead of hanging. Probe tabs all carry `?qa=…` and the fixture tab is
+matched on an empty query string — matching on pathname alone silently selected
+a probe tab and classified into it (rule 4, the hard way). Console hygiene
+counts only what the current run produced: each context replays its buffer on
+attach (rule 8), so the suite snapshots that first and diffs against it.
+
+**Do not trust a launch flag to disable WebGPU.** `--disable-features=WebGPU`
+does *not* work — `requestAdapter()` still resolves under it. `--disable-gpu`
+does, which is what `--no-webgpu` passes. `qa:runtime` never assumes: it reads
+`chrome://gpu`, probes `requestAdapter()` in the extension context, and asserts
+the provider the classifier actually chose matches what the browser can do.
+
 ## Agent-driven debugging
 
 `scripts/debug-extension.mjs` (`pnpm debug`) talks to a browser started by
@@ -50,10 +122,12 @@ document, options page and content scripts — which is the whole point.
 
 | Command | What it does |
 |---|---|
-| `pnpm debug status` | Targets, model install state, WebGPU availability. |
+| `pnpm debug status` | Targets, model install state, and the browser's WebGPU probe. |
 | `pnpm debug classify "<text>"` | Classify text on the fixtures page and print the card. |
 | `pnpm debug classify --section 1` | Same, using fixture section 1. |
 | `pnpm debug logs [seconds]` | Stream console from every extension context, with an error/warning tally. |
+| `pnpm debug throttle <rate>` | Throttle the offscreen **main thread**. Does not slow inference — see rule 9. |
+| `pnpm debug backlog [n]` | Queue n classifications so a card sits in `loading` past the 45s watchdog. |
 | `pnpm debug reach` | Which open tabs have a live content script. |
 
 **Two tools that cannot do this job:**
@@ -72,7 +146,12 @@ document, options page and content scripts — which is the whole point.
    SIGTERM discards buffered stdout, which silently produced empty runs.
 2. The MV3 service worker idles out constantly. Never assume its target exists —
    wake it via the options page and poll for it.
-3. Put a timeout on every CDP call so a hang fails loudly instead of hanging.
+3. Put a timeout on every CDP call so a hang fails loudly instead of hanging —
+   and make it *per call*. `send`/`eval` hard-coded 30s and silently ignored the
+   timeout their callers passed, so a liveness probe that asked for 2s waited
+   half a minute and crash detection could never fire inside its budget.
+   `eval` also reports page exceptions as a `{__error}` value rather than a
+   rejection, so callers probing liveness must check for that shape.
 4. Give probe tabs a unique URL marker. Several tabs share a prefix and
    `tabs.query()` returns the first match, which silently sends messages to the
    wrong tab.
@@ -87,7 +166,20 @@ document, options page and content scripts — which is the whole point.
    for the window you watched. Two consecutive captures showed the same
    "5 warnings" from events minutes earlier. Check the timestamps inside the
    messages before believing a warning is new, or relaunch for a clean buffer.
-9. **A blocking dialog stalls the CDP call that triggered it.** `window.confirm`
+9. **The classifier worker is not a CDP target, and CPU throttling cannot
+   reach it.** Two separate walls, both measured. Chrome never lists the
+   dedicated module worker that owns the ONNX session: `/json/list` shows no
+   `worker` targets before the first classification and afterwards shows exactly
+   `ort.env.wasm.numThreads` of them — ONNX Runtime's pthreads, parked in
+   `Atomics.wait`, which answer no CDP call (even `Runtime.enable` times out).
+   Separately, `Emulation.setCPUThrottlingRate` is main-thread-only: on the
+   offscreen document a busy loop went 29 ms → 293 ms at 10x while the same loop
+   inside a dedicated worker stayed at 28 ms → 29 ms. So there is no way to slow
+   inference from CDP. Use `pnpm debug backlog` instead — the classify queue is
+   strictly serial, so requests behind the head genuinely wait. The worker's
+   console is not lost: Chrome routes it into the parent offscreen document's
+   stream, so `pnpm debug logs` already carries it.
+10. **A blocking dialog stalls the CDP call that triggered it.** `window.confirm`
    inside a `change` handler means `DOM.setFileInputFiles` does not resolve
    until the dialog is answered — fire the pick without awaiting it, then
    handle `Page.javascriptDialogOpening`. Never detach while a modal is open:
@@ -136,8 +228,8 @@ document, options page and content scripts — which is the whole point.
 ## Stable Chrome vs Chrome for Testing
 
 - Chrome for Testing (CfT) = same Chromium build as stable Chrome for everything that
-  matters to the extension runtime (SW, manifest, content scripts, offscreen, WebGPU,
-  OPFS). The only difference is automation policy.
+  matters to the extension runtime (SW, manifest, content scripts, offscreen,
+  WebGPU, WebAssembly, workers, OPFS). The only difference is automation policy.
 - Stable Chrome **ignores `--load-extension`** unless developer mode is already ON in
   the profile, and in recent versions does so even then. `pnpm chrome:real` exists but
   don't rely on it for automation — use it only to attach to a daily Chrome the user
@@ -159,7 +251,10 @@ context-menu click
   └── SW: resume any journaled pre-v1 migration
   └── SW: sendToTab(tabId, classify:started)   → content script mounts card in 'loading'
   └── SW: ensureOffscreenDocument()
-  └── SW: sendToRuntime(classify:run)          → offscreen runs inference
+  └── SW: sendToRuntime(classify:run)          → offscreen queues the request
+                                                 └── one classifier worker/session
+                                                     ├── prefer WebGPU
+                                                     └── fall back to local CPU/WASM
                                                  └── offscreen: broadcast classify:result
                                                      └── SW router receives
                                                          └── SW: sendMessage(tabId, classify:result)
@@ -168,9 +263,11 @@ context-menu click
 
 - All non-trivial state transitions in the card go through the pure reducer in
   `content/state.ts` — unit-testable with no DOM.
-- The offscreen classifier is `OnnxClassifierRepository`; the fake repository is
-  test-only. The content script records `performance.now()` on accepted start/result
-  actions, so timing remains presentation metadata and never enters this protocol.
+- The offscreen document owns one worker-backed classifier client and one FIFO queue
+  shared by every tab. The worker owns the `OnnxClassifierRepository` and its single
+  ONNX session; the fake repository is test-only. The content script records
+  `performance.now()` on accepted start/result actions, so timing remains presentation
+  metadata and never enters this protocol.
 
 ## Things to not trust
 
@@ -199,8 +296,23 @@ context-menu click
   `3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e`.
   It declares `SlopHammer 350M v0.1`, `trim+zw`, `tau=3.8088`, and
   `abstain_band=1.5`. Runtime validation rejects every retired/future identity.
-- v1 is WebGPU-only and requires 40 words. Do not claim a CPU fallback or use
-  the retired 75-character gate.
+- v1 requires 40 words and prefers WebGPU. If WebGPU is unavailable or its session
+  cannot initialize, the packaged classifier worker retries the same pinned model
+  with the local ONNX Runtime CPU/WASM execution provider. Both paths remain fully
+  local and share the same preprocessing, tokenization, calibration, thresholds, and
+  result contract. CPU/WASM can be materially slower, especially on older Windows and
+  ChromeOS hardware; do not promise WebGPU-equivalent latency or use the retired
+  75-character gate.
+- Runtime provider metadata is diagnostic only and must not add result-card noise.
+  A normal fallback is an informational event, not a warning. If both providers fail,
+  retain both technical causes in diagnostics while showing an actionable browser,
+  memory, or model-recovery message.
+- Manual runtime QA must cover both providers, and is now one command per provider —
+  see "Runtime QA (execution providers)". Run it green on `--expect webgpu` and on
+  `--expect wasm` before claiming the fallback works. An Apple Silicon run is useful
+  evidence, not a claim that it reproduces a particular Windows or Chromebook CPU;
+  in particular inference here is far too fast to reach the 45s card watchdog, which
+  is why the watchdog is verified by driving the messages rather than by being slow.
 - A pre-v1 update writes `.slophammer-v1-migration.json` at the OPFS root,
   outside `slop-hammer/`, before storage/model deletion. The resumable phases are
   `pending → wiping → downloading → installing → ready`; `error` retains its reason.

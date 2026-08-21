@@ -8,6 +8,12 @@ import type { ClassifierRepository } from '@/llm/classifier-repository'
 import type { ModelStatusMessage } from '@/messaging/protocol'
 
 const onnxClassifier: ClassifierRepository = {
+  runtimeDiagnostics: {
+    executionProvider: 'wasm',
+    wasmThreads: 2,
+    crossOriginIsolated: true,
+    fallbackReason: 'No compatible WebGPU adapter was found.',
+  },
   classify: vi.fn(async () => ({
     probs: [0.1, 0.2, 0.3, 0.4] as [number, number, number, number],
     rawPct: [10, 20, 30, 40] as [number, number, number, number],
@@ -31,6 +37,7 @@ describe('createClassifierRepository', () => {
     })
     expect(repo).toBe(onnxClassifier)
     expect(status.map((s) => s.status)).toEqual(['loading', 'ready'])
+    expect(status.at(-1)).toMatchObject({ status: 'ready', provider: 'wasm' })
   })
 
   // A detector that silently invents verdicts is worse than one that refuses to

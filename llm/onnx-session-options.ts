@@ -13,3 +13,11 @@ export function webGpuSessionOptions(externalData: ExternalDataFile[]) {
     externalData,
   }
 }
+
+export function wasmSessionOptions(externalData: ExternalDataFile[]) {
+  return {
+    executionProviders: ['wasm'] as const,
+    logSeverityLevel: 3 as const,
+    externalData,
+  }
+}

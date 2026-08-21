@@ -15,6 +15,7 @@ import {
   type TokenizerLike,
 } from './onnx-deps'
 import type { RuntimeContract } from './runtime-contract'
+import type { RuntimeDiagnostics } from './execution-provider'
 import { padInputIds } from './token-preparation'
 
 export interface OnnxClassifierDeps {
@@ -27,16 +28,33 @@ export interface OnnxClassifierDeps {
    * or another authoritative source. Never defaulted — see #10.
    */
   runtime: RuntimeContract
+  runtimeDiagnostics?: RuntimeDiagnostics
 }
 
 export class OnnxClassifierRepository implements ClassifierRepository {
-  constructor(private readonly deps: OnnxClassifierDeps) {}
+  readonly runtimeDiagnostics?: RuntimeDiagnostics
+  // Owners decide whether to rebuild from `isDisposed()`. Leaving it
+  // unimplemented meant a released session reported itself alive and the next
+  // `classify` failed with a raw ORT error instead of a clean rebuild.
+  #disposed = false
+
+  constructor(private readonly deps: OnnxClassifierDeps) {
+    this.runtimeDiagnostics = deps.runtimeDiagnostics
+  }
+
+  isDisposed(): boolean {
+    return this.#disposed
+  }
 
   async dispose(): Promise<void> {
+    this.#disposed = true
     await this.deps.session.release?.()
   }
 
   async classify(text: string): Promise<ClassifyResult> {
+    if (this.#disposed) {
+      throw new Error('Classifier session was released and is no longer available.')
+    }
     const { tokenizer, session, contract, createTensor, runtime } = this.deps
     const maxSeq = contract.max_seq_length
     const { padId, padSide } = runtime

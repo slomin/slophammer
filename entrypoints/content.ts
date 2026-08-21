@@ -1,3 +1,4 @@
+import { createClassifyWatchdog } from '@/content/classify-watchdog'
 import { buildCard, type CardElements } from '@/content/card-dom'
 import { renderState } from '@/content/card-state'
 import { formatResultSummary } from '@/content/result-summary'
@@ -301,46 +302,21 @@ export default defineContentScript({
 
     // Watchdog: a request that never comes back (wedged offscreen document,
     // dropped message, service worker death) would otherwise leave the card
-    // spinning in 'loading' indefinitely.
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null
-
-    function clearClassifyTimeout() {
-      if (timeoutHandle === null) return
-      clearTimeout(timeoutHandle)
-      timeoutHandle = null
-    }
-
-    function armClassifyTimeout(requestId: string) {
-      clearClassifyTimeout()
-      timeoutHandle = setTimeout(() => {
-        timeoutHandle = null
+    // spinning in 'loading' indefinitely. The timing rules live in
+    // content/classify-watchdog.ts so they are testable with fake timers.
+    const watchdog = createClassifyWatchdog({
+      timeoutMs: CLASSIFY_TIMEOUT_MS,
+      onTimeout: (requestId) => {
         log.warn('classify timed out', { requestId, ms: CLASSIFY_TIMEOUT_MS })
         applyAction({ type: 'classify:timeout', requestId })
-      }, CLASSIFY_TIMEOUT_MS)
-    }
+      },
+    })
 
     function applyAction(action: Parameters<typeof reduceCardState>[1]) {
       const prev = state
       state = reduceCardState(prev, action)
 
-      // Arm on every new request; disarm as soon as we're no longer waiting.
-      // Keying off the resulting state means a stale result for an older
-      // request can't cancel the live request's timer.
-      if (action.type === 'classify:started') {
-        armClassifyTimeout(action.requestId)
-      } else if (
-        action.type === 'model:status' &&
-        action.status === 'loading' &&
-        state.kind === 'loading'
-      ) {
-        // A cold model load streams progress for as long as it takes to read
-        // the weights out of OPFS and build the session. That is real work, not
-        // a hang, so extend the deadline rather than firing a false timeout and
-        // then discarding the genuine result when it finally arrives.
-        armClassifyTimeout(state.requestId)
-      } else if (state.kind !== 'loading') {
-        clearClassifyTimeout()
-      }
+      watchdog.sync(action, state)
 
       if (state === prev) return
       const c = mountCard()
