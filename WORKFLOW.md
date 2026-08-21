@@ -13,6 +13,17 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 - Run the right thing at the right time — `pnpm test` is fast (<2 s), `pnpm test:e2e` is ~2 s per spec.
 - Never commit code whose tests don't prove the behaviour the commit claims.
 
+**Tokenizer drift.** `@huggingface/tokenizers` is pinned to an *exact* version:
+it decides every token id, and one changed id can flip a verdict across the
+calibration threshold without raising anything. `tests/unit/tokenizer-vectors.test.ts`
+re-checks recorded ids from the real 350M vocabulary and is the gate for
+accepting a bump, but it needs the vocabulary on disk and skips without it:
+
+```sh
+unzip -o -j references/models/slophammer_350m_v0_1.zip \
+  tokenizer.json tokenizer_config.json -d references/models/tokenizer
+```
+
 ## Commands (quick reference)
 
 | Command | What it does |
@@ -30,7 +41,7 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
 | `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
 | `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
-| `pnpm check:package` | Assert the build output holds exactly one ONNX Runtime WASM binary, at `ort/`, and print the unpacked size. Runs inside `pnpm release`. |
+| `pnpm check:package` | Audit an **existing** `.output/chrome-mv3` — one ONNX Runtime WASM binary at `ort/`, every `ORT_RUNTIME_FILES` entry present, non-WASM weight under budget. Prints the build's timestamp and sizes. Build first; `pnpm release` runs it on the packed tree. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
@@ -371,7 +382,14 @@ context-menu click
   `PreTrainedTokenizer` wraps anyway), and select ORT's
   `onnxruntime-web-use-extern-wasm` export condition in `wxt.config.ts`. That
   condition is load-bearing — dropping it silently doubles the package.
-  `pnpm check:package` guards both, because only the build output shows this.
+  `pnpm check:package` guards this, because only the build output shows it —
+  but note *how*. The extern-wasm condition is global, so a second
+  `onnxruntime-web` arriving transitively resolves to the extern entry too and
+  emits no extra `.wasm`. Counting binaries would not see it. The non-WASM
+  weight budget is what catches that case, and the runtime-files assertion
+  covers the new failure the condition introduces: the emscripten factory
+  `.mjs` used to be inlined, and is now fetched at startup, so losing it breaks
+  both providers while the build stays green.
 - **Reddit: card existed in DOM but was invisible.** The old content-card host was an
   undefined custom element (`<slop-hammer-card>`). Reddit ships global
   `:not(:defined) { visibility: hidden; }`, so the host inherited `visibility: hidden`
@@ -393,6 +411,7 @@ scripts/               launch-chrome, launch-real-chrome, release, reload, insta
                        generate-icons, serve-test-page, qa-setup, qa-runtime,
                        debug-extension, check-package
 tests/unit/            Vitest specs — one per pure module
+tests/fixtures/        Recorded data the specs assert against (350M token vectors)
 tests/e2e/             Playwright E2E + persistent-context fixtures
 references/releases/current/unpacked   What to Load unpacked for manual testing
 ```

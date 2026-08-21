@@ -106,10 +106,14 @@ describe('createTokenizer', () => {
     expect(createTokenizer(TOKENIZER_JSON, { pad_token: '[PAD]' }).pad_token_id).toBe(0)
   })
 
-  it('accepts the serialized AddedToken form of a pad token', () => {
-    const config = { pad_token: { __type: 'AddedToken', content: '[PAD]' } }
+  it('accepts both serialized AddedToken forms of a pad token', () => {
+    const legacy = { pad_token: { __type: 'AddedToken', content: '[PAD]' } }
+    const modern = {
+      pad_token: { content: '[PAD]', lstrip: false, rstrip: false, normalized: false, single_word: false },
+    }
 
-    expect(createTokenizer(TOKENIZER_JSON, config).pad_token_id).toBe(0)
+    expect(createTokenizer(TOKENIZER_JSON, legacy).pad_token_id).toBe(0)
+    expect(createTokenizer(TOKENIZER_JSON, modern).pad_token_id).toBe(0)
   })
 
   it('falls back to the end-of-sequence token when no pad token is configured', () => {
@@ -128,6 +132,28 @@ describe('createTokenizer', () => {
   })
 })
 
+describe('a vocabulary with no unknown token', () => {
+  // The pinned 350M artifact is byte-level BPE, so every byte maps and this
+  // cannot fire there. It can for a tokenizer.json that declares no unknown
+  // token: `encode` falls back to `unk_token_id`, which is itself undefined.
+  const NO_UNK = {
+    ...TOKENIZER_JSON,
+    model: { ...TOKENIZER_JSON.model, unk_token: null },
+  }
+
+  it('names the failure instead of raising a bare BigInt TypeError', () => {
+    const tokenizer = createTokenizer(NO_UNK, { pad_token: '[PAD]' })
+
+    expect(() => tokenizer('mystery')).toThrow(/no id.*no unknown token/s)
+  })
+
+  it('still encodes text the vocabulary does cover', () => {
+    const tokenizer = createTokenizer(NO_UNK, { pad_token: '[PAD]' })
+
+    expect([...tokenizer('checks text').input_ids.data]).toEqual([1n, 7n, 8n, 2n])
+  })
+})
+
 describe('resolveSpecialToken', () => {
   it('takes the first key that is present and non-empty', () => {
     expect(resolveSpecialToken({ pad_token: '[PAD]', eos_token: '[EOS]' }, 'pad_token', 'eos_token')).toBe(
@@ -139,15 +165,22 @@ describe('resolveSpecialToken', () => {
     expect(resolveSpecialToken({}, 'pad_token', 'eos_token')).toBeNull()
   })
 
-  it('unwraps the AddedToken object form', () => {
+  // Hugging Face has written all three of these over the years; transformers'
+  // own helper recognised only the `__type` form.
+  it('unwraps every object form that carries a string content', () => {
     expect(
       resolveSpecialToken({ pad_token: { __type: 'AddedToken', content: '[PAD]' } }, 'pad_token'),
     ).toBe('[PAD]')
+    expect(resolveSpecialToken({ pad_token: { content: '[PAD]', lstrip: false } }, 'pad_token')).toBe(
+      '[PAD]',
+    )
   })
 
-  it('refuses an object shape it does not recognise rather than guessing', () => {
-    expect(() => resolveSpecialToken({ pad_token: { content: '[PAD]' } }, 'pad_token')).toThrow(
-      /Unrecognised special token/,
-    )
+  // Skipping to the next key would pad with the end-of-sequence id instead of
+  // the pad id, silently.
+  it('refuses an object with no usable content rather than falling through', () => {
+    expect(() =>
+      resolveSpecialToken({ pad_token: { id: 0 }, eos_token: '[EOS]' }, 'pad_token', 'eos_token'),
+    ).toThrow(/Unrecognised special token/)
   })
 })

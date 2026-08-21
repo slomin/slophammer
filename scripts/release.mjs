@@ -6,10 +6,14 @@ const RELEASE_DIR = resolve('references/releases/current')
 const PKG_VERSION = JSON.parse(execSync('cat package.json').toString()).version
 const ZIP_NAME = `slophammer-${PKG_VERSION}-chrome.zip`
 
-execSync('pnpm build', { stdio: 'inherit' })
-// Exits non-zero if the package grew a second ONNX Runtime WASM binary (#34).
-execSync('node scripts/check-package.mjs', { stdio: 'inherit' })
+// `wxt zip` runs a full build of its own first, so this both builds and packs.
+// A separate `pnpm build` here would be a second identical build, and — worse —
+// anything checked between the two would be auditing a tree that `wxt zip` then
+// throws away and replaces.
 execSync('pnpm exec wxt zip', { stdio: 'inherit' })
+// Exits non-zero if the package grew a second ONNX Runtime WASM binary, lost a
+// file the runtime loads from ort/, or outgrew its budget (#34).
+execSync('pnpm check:package', { stdio: 'inherit' })
 
 if (existsSync(RELEASE_DIR)) rmSync(RELEASE_DIR, { recursive: true, force: true })
 mkdirSync(RELEASE_DIR, { recursive: true })

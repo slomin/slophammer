@@ -21,9 +21,17 @@ import type { TokenizerLike } from './onnx-deps'
 
 /**
  * Reads a special token out of tokenizer_config.json, trying each key in turn.
- * Hugging Face writes these either as a plain string or as a serialized
- * `AddedToken` object, and which one you get depends on how the tokenizer was
- * saved.
+ *
+ * Hugging Face writes these three ways depending on when and how the tokenizer
+ * was saved: a plain string, the older `{__type: 'AddedToken', content}` form,
+ * or a bare `{content, lstrip, rstrip, normalized, single_word}` dict. Any
+ * object carrying a string `content` is accepted; transformers' own helper only
+ * recognised the `__type` form and threw on the modern dict.
+ *
+ * An object with no usable content still throws rather than being skipped:
+ * moving on to the next key would pad with the *end-of-sequence* id instead of
+ * the pad id, silently, and produce a confident wrong score — the failure mode
+ * #10 was about.
  */
 export function resolveSpecialToken(config: unknown, ...keys: string[]): string | null {
   if (typeof config !== 'object' || config === null) return null
@@ -33,12 +41,8 @@ export function resolveSpecialToken(config: unknown, ...keys: string[]): string 
     const item = record[key]
     if (!item) continue
     if (typeof item === 'string') return item
-    if (typeof item === 'object' && (item as { __type?: unknown }).__type === 'AddedToken') {
-      const { content } = item as { content?: unknown }
-      if (typeof content === 'string') return content
-    }
-    // Guessing here would silently pad with the wrong id and produce a
-    // confident, wrong score — the failure mode #10 was about.
+    const { content } = item as { content?: unknown }
+    if (typeof content === 'string') return content
     throw new Error(`Unrecognised special token for '${key}': ${JSON.stringify(item)}`)
   }
 
@@ -63,7 +67,23 @@ export function createTokenizer(tokenizerJson: unknown, tokenizerConfig: unknown
       add_special_tokens: options?.add_special_tokens ?? true,
       return_token_type_ids: false,
     })
-    return { input_ids: { data: BigInt64Array.from(ids, (id) => BigInt(id)) } }
+    return {
+      input_ids: {
+        data: BigInt64Array.from(ids, (id) => {
+          // `encode` falls back to the model's `unk_token_id`, which is itself
+          // undefined when tokenizer.json declares no unknown token. The pinned
+          // 350M artifact is byte-level BPE so every byte maps and this cannot
+          // fire, but `BigInt(undefined)` is a bare TypeError several frames
+          // from its cause — name the problem instead.
+          if (typeof id !== 'number') {
+            throw new Error(
+              'Tokenizer produced a token with no id; the vocabulary declares no unknown token to fall back to.',
+            )
+          }
+          return BigInt(id)
+        }),
+      },
+    }
   }
 
   encode.pad_token_id = padToken === null ? undefined : tokenizer.token_to_id(padToken)
