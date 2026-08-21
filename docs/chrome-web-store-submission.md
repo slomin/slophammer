@@ -74,6 +74,19 @@ Content security policy:
 
 ## Reviewer test instructions
 
+The dashboard field is short; this is the version submitted for 1.0.0:
+
+> No account needed. Everything runs locally.
+>
+> 1. Open the options page and click “Install from Hugging Face” (downloads the ~206 MB SlopHammer 350M model once, checksum-verified).
+> 2. On any http/https page, select 40+ words, right-click, choose “Check with SlopHammer”. A result card appears next to the selection with a Human/AI verdict, confidence, percentage and bar.
+> 3. Select fewer than 40 words: the card asks for at least 40 and nothing runs.
+> 4. On the card, switch Mode to Advanced to see the four raw buckets and analysis time.
+> 5. Without WebGPU (or with graphics acceleration off), the same check completes on the CPU/WebAssembly fallback; it can take longer.
+
+The long form below is the internal checklist; the upgrade step is covered by
+`pnpm qa:upgrade` rather than by reviewers.
+
 > SlopHammer does not require an account.
 >
 > 1. Install the extension and open options.
