@@ -11,9 +11,19 @@ const ZIP_NAME = `slophammer-${PKG_VERSION}-chrome.zip`
 // anything checked between the two would be auditing a tree that `wxt zip` then
 // throws away and replaces.
 execSync('pnpm exec wxt zip', { stdio: 'inherit' })
+
 // Exits non-zero if the package grew a second ONNX Runtime WASM binary, lost a
-// file the runtime loads from ort/, or outgrew its budget (#34).
-execSync('pnpm check:package', { stdio: 'inherit' })
+// file the runtime loads from ort/, or outgrew its budget (#34). Because the
+// audit now runs after packing, a failure leaves a finished zip on disk that is
+// indistinguishable by name from a good one — and that is exactly the file
+// somebody would reach for to upload. Delete it.
+try {
+  execSync('pnpm check:package', { stdio: 'inherit' })
+} catch (error) {
+  rmSync(resolve(`.output/${ZIP_NAME}`), { force: true })
+  console.error(`\nRemoved .output/${ZIP_NAME} — it did not pass the package audit.`)
+  process.exit(typeof error.status === 'number' ? error.status : 1)
+}
 
 if (existsSync(RELEASE_DIR)) rmSync(RELEASE_DIR, { recursive: true, force: true })
 mkdirSync(RELEASE_DIR, { recursive: true })

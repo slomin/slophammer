@@ -1,6 +1,7 @@
 {
   "artifact": "slophammer_350m_v0_1",
   "tokenizerSha256": "1d00e918ad0966e8481ead0b4b2e87f182e7599121d40dcb52302ad0b9705005",
+  "tokenizerConfigSha256": "3527d8ab12d99aa876fd8919623e9da2d68a26e2a01fe28698b5735dc61945f7",
   "padTokenId": 0,
   "cases": [
     {
@@ -127,7 +128,7 @@
     },
     {
       "label": "zero-width interleaved",
-      "text": "Th​‌‍⁠﻿is te​‌‍⁠﻿xt has zero​‌‍⁠﻿-width characters.",
+      "text": "Th\u200b\u200c\u200d\u2060\ufeffis te\u200b\u200c\u200d\u2060\ufeffxt has zero\u200b\u200c\u200d\u2060\ufeff-width characters.",
       "addSpecialTokens": true,
       "ids": [
         1,
@@ -171,7 +172,7 @@
     },
     {
       "label": "zero-width interleaved",
-      "text": "Th​‌‍⁠﻿is te​‌‍⁠﻿xt has zero​‌‍⁠﻿-width characters.",
+      "text": "Th\u200b\u200c\u200d\u2060\ufeffis te\u200b\u200c\u200d\u2060\ufeffxt has zero\u200b\u200c\u200d\u2060\ufeff-width characters.",
       "addSpecialTokens": false,
       "ids": [
         1548,
@@ -214,7 +215,7 @@
     },
     {
       "label": "zero-width only",
-      "text": "​‌‍⁠﻿",
+      "text": "\u200b\u200c\u200d\u2060\ufeff",
       "addSpecialTokens": true,
       "ids": [
         1,
@@ -231,7 +232,7 @@
     },
     {
       "label": "zero-width only",
-      "text": "​‌‍⁠﻿",
+      "text": "\u200b\u200c\u200d\u2060\ufeff",
       "addSpecialTokens": false,
       "ids": [
         21075,
@@ -247,7 +248,7 @@
     },
     {
       "label": "unicode, emoji, RTL, combining",
-      "text": "Ça va? 日本語, 🔨🤖, ﬁ ﬂ, עברית, é vs é.",
+      "text": "\u00c7a va? \u65e5\u672c\u8a9e, \ud83d\udd28\ud83e\udd16, \ufb01 \ufb02, \u05e2\u05d1\u05e8\u05d9\u05ea, e\u0301 vs \u00e9.",
       "addSpecialTokens": true,
       "ids": [
         1,
@@ -290,7 +291,7 @@
     },
     {
       "label": "unicode, emoji, RTL, combining",
-      "text": "Ça va? 日本語, 🔨🤖, ﬁ ﬂ, עברית, é vs é.",
+      "text": "\u00c7a va? \u65e5\u672c\u8a9e, \ud83d\udd28\ud83e\udd16, \ufb01 \ufb02, \u05e2\u05d1\u05e8\u05d9\u05ea, e\u0301 vs \u00e9.",
       "addSpecialTokens": false,
       "ids": [
         637,
@@ -436,7 +437,7 @@
     },
     {
       "label": "numbers and punctuation",
-      "text": "3.14159, 1e-9, $1,234.56 — 50% ~ 98%! (raw=[\"1\",\"2\",\"4\",\"93\"])",
+      "text": "3.14159, 1e-9, $1,234.56 \u2014 50% ~ 98%! (raw=[\"1\",\"2\",\"4\",\"93\"])",
       "addSpecialTokens": true,
       "ids": [
         1,
@@ -483,7 +484,7 @@
     },
     {
       "label": "numbers and punctuation",
-      "text": "3.14159, 1e-9, $1,234.56 — 50% ~ 98%! (raw=[\"1\",\"2\",\"4\",\"93\"])",
+      "text": "3.14159, 1e-9, $1,234.56 \u2014 50% ~ 98%! (raw=[\"1\",\"2\",\"4\",\"93\"])",
       "addSpecialTokens": false,
       "ids": [
         528,

@@ -178,9 +178,13 @@ describe('resolveSpecialToken', () => {
 
   // Skipping to the next key would pad with the end-of-sequence id instead of
   // the pad id, silently.
-  it('refuses an object with no usable content rather than falling through', () => {
+  it.each([
+    ['no content at all', { id: 0 }],
+    ['an empty content', { content: '' }],
+    ['a non-string content', { content: 42 }],
+  ])('refuses an object with %s rather than falling through', (_label, padToken) => {
     expect(() =>
-      resolveSpecialToken({ pad_token: { id: 0 }, eos_token: '[EOS]' }, 'pad_token', 'eos_token'),
+      resolveSpecialToken({ pad_token: padToken, eos_token: '[EOS]' }, 'pad_token', 'eos_token'),
     ).toThrow(/Unrecognised special token/)
   })
 })

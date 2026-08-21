@@ -42,7 +42,10 @@ export function resolveSpecialToken(config: unknown, ...keys: string[]): string 
     if (!item) continue
     if (typeof item === 'string') return item
     const { content } = item as { content?: unknown }
-    if (typeof content === 'string') return content
+    // An empty content is treated as absent, matching the plain-string branch
+    // above — but it still throws rather than falling through, because moving on
+    // would pad with the end-of-sequence id in place of the pad id, silently.
+    if (typeof content === 'string' && content.length > 0) return content
     throw new Error(`Unrecognised special token for '${key}': ${JSON.stringify(item)}`)
   }
 
