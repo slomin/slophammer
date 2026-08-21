@@ -30,6 +30,7 @@ test-covered (`ClassifierRepository`, `ZipReaderLike`, `OpfsAdapterLike`, `Token
 | `pnpm qa` | One-shot QA bootstrap: build if stale, start the test page, launch CfT. |
 | `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
 | `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
+| `pnpm check:package` | Assert the build output holds exactly one ONNX Runtime WASM binary, at `ort/`, and print the unpacked size. Runs inside `pnpm release`. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
 ## The working dev loop
@@ -358,6 +359,19 @@ context-menu click
   why it reproduced only in stable Chrome. Fix: fire-and-forget the tab
   send (`forwardToTab` helper). Reference implementation in `references/`
   uses the same pattern.
+- **50 MB of WebAssembly nobody ever executed.** The package reached 78 MB with
+  three `.wasm` binaries in it, only one of which is loaded. Two independent
+  causes, neither visible to tests or typecheck: importing one tokenizer symbol
+  from `@huggingface/transformers` dragged in that library's own ONNX backend
+  and a second `onnxruntime-web`; and ONNX Runtime's *default* entry is the
+  bundled one, which inlines the emscripten factory and so carries
+  `new URL('…asyncify.wasm', import.meta.url)` — enough for Vite to emit its own
+  copy of a binary we already ship at `ort/` and load by path. Fix: build the
+  tokenizer directly on `@huggingface/tokenizers` (which is what
+  `PreTrainedTokenizer` wraps anyway), and select ORT's
+  `onnxruntime-web-use-extern-wasm` export condition in `wxt.config.ts`. That
+  condition is load-bearing — dropping it silently doubles the package.
+  `pnpm check:package` guards both, because only the build output shows this.
 - **Reddit: card existed in DOM but was invisible.** The old content-card host was an
   undefined custom element (`<slop-hammer-card>`). Reddit ships global
   `:not(:defined) { visibility: hidden; }`, so the host inherited `visibility: hidden`
@@ -376,7 +390,8 @@ install/               zip orchestrator + OPFS writer + fflate reader + file rec
 llm/                   classifier interface, Fake + Onnx impls, contract, fp16, token prep, opfs reader
 messaging/             protocol types + discriminated-union guards + logger with error forwarding
 scripts/               launch-chrome, launch-real-chrome, release, reload, install-cft,
-                       generate-icons, serve-test-page
+                       generate-icons, serve-test-page, qa-setup, qa-runtime,
+                       debug-extension, check-package
 tests/unit/            Vitest specs — one per pure module
 tests/e2e/             Playwright E2E + persistent-context fixtures
 references/releases/current/unpacked   What to Load unpacked for manual testing

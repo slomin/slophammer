@@ -7,6 +7,8 @@ const PKG_VERSION = JSON.parse(execSync('cat package.json').toString()).version
 const ZIP_NAME = `slophammer-${PKG_VERSION}-chrome.zip`
 
 execSync('pnpm build', { stdio: 'inherit' })
+// Exits non-zero if the package grew a second ONNX Runtime WASM binary (#34).
+execSync('node scripts/check-package.mjs', { stdio: 'inherit' })
 execSync('pnpm exec wxt zip', { stdio: 'inherit' })
 
 if (existsSync(RELEASE_DIR)) rmSync(RELEASE_DIR, { recursive: true, force: true })

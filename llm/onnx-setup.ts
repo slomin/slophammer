@@ -1,4 +1,3 @@
-import { PreTrainedTokenizer } from '@huggingface/transformers'
 import * as ort from 'onnxruntime-web/webgpu'
 import type { ClassifierRepository } from './classifier-repository'
 import { validateSupportedContract, type SlopHammerContract } from './contract'
@@ -15,6 +14,7 @@ import type { InferenceSessionLike, TokenizerLike } from './onnx-deps'
 import { wasmSessionOptions, webGpuSessionOptions } from './onnx-session-options'
 import { loadAllModelFiles, type ReadProgress } from './opfs-model-reader'
 import { resolveRuntimeContract } from './runtime-contract'
+import { createTokenizer } from './tokenizer'
 import { chooseWasmThreadCount } from './wasm-runtime'
 
 interface PreparedModel {
@@ -65,11 +65,11 @@ export async function setupOnnxClassifier(
 
     const tokenizerConfig = JSON.parse(files.tokenizerConfigJson)
     const tokenizerData = JSON.parse(files.tokenizerJson)
-    const tokenizer = new PreTrainedTokenizer(tokenizerData, tokenizerConfig)
+    const tokenizer = createTokenizer(tokenizerData, tokenizerConfig)
 
     return {
       contract,
-      tokenizer: tokenizer as unknown as TokenizerLike,
+      tokenizer,
       tokenizerPadding: (tokenizerData as {
         padding?: { direction?: unknown; pad_id?: unknown }
       }).padding,
@@ -148,8 +148,7 @@ export async function setupOnnxClassifier(
     try {
       runtime = resolveRuntimeContract({
         contract: model.contract,
-        tokenizerPadId:
-          (model.tokenizer as unknown as { pad_token_id?: number }).pad_token_id ?? null,
+        tokenizerPadId: model.tokenizer.pad_token_id ?? null,
         tokenizerPadding: model.tokenizerPadding,
         sessionOutputNames: session.outputNames,
       })

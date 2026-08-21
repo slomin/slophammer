@@ -10,6 +10,9 @@ This is the operational runbook for SlopHammer’s Chrome Web Store package. The
 - Hugging Face artifact: `Slomin/slophammer_350m/slophammer_350m_v0_1.zip`.
 - Download size: `215720009` bytes; unpacked model files are about 230 MB.
 - SHA-256/LFS OID: `3d4f39017e0b47df6d4d3ee1d4a827f7a2eb42106fa12ed95dad4e67c0d63d4e`.
+- Packaged extension: `27.50 MB` unpacked, `6.44 MB` zipped. It contains exactly one
+  ONNX Runtime WASM binary (`ort/ort-wasm-simd-threaded.asyncify.wasm`, 27.19 MB);
+  `pnpm check:package` asserts that and prints the current sizes.
 - Input floor: 40 words.
 - Runtime: local WebGPU preferred, with an automatic packaged CPU/WASM fallback when
   WebGPU is unavailable or cannot initialize. CPU inference can be materially slower.
