@@ -74,7 +74,7 @@ Content security policy:
 
 ## Reviewer test instructions
 
-The dashboard field is short; this is the version submitted for 1.0.0:
+Submitted for 1.0.0 (the dashboard field is short):
 
 > No account needed. Everything runs locally.
 >
@@ -83,30 +83,6 @@ The dashboard field is short; this is the version submitted for 1.0.0:
 > 3. Select fewer than 40 words: the card asks for at least 40 and nothing runs.
 > 4. On the card, switch Mode to Advanced to see the four raw buckets and analysis time.
 > 5. Without WebGPU (or with graphics acceleration off), the same check completes on the CPU/WebAssembly fallback; it can take longer.
-
-The long form below is the internal checklist; the upgrade step is covered by
-`pnpm qa:upgrade` rather than by reviewers.
-
-> SlopHammer does not require an account.
->
-> 1. Install the extension and open options.
-> 2. Click “Install from Hugging Face.” Confirm the verified SlopHammer 350M v0.1 model installs.
-> 3. On a normal HTTP/HTTPS page, select 39 words and choose “Check with SlopHammer.” Confirm the card says it needs at least 40 words and no inference begins.
-> 4. In current Chrome with WebGPU available, select 40 or more words and run the
-> check. Confirm the card shows a Human/AI result, confidence label, prominent
-> percentage, explanatory sentence, and binary bar.
-> 5. Open Advanced detail and confirm the four raw buckets and analysis time appear, without decision score or threshold.
-> 6. Verify Copy and Share contain only “SlopHammer: AI Content Detector” and the raw four-bucket distribution.
-> 7. Verify System, Light, and Dark themes and card minimisation.
-> 8. Where WebGPU is unavailable or blocked, run the same check and confirm SlopHammer
-> automatically completes it with the local CPU/WebAssembly fallback. The fallback can
-> take materially longer on older hardware; keep the result card open while it works.
-> 9. If neither WebGPU nor CPU/WebAssembly can start, confirm the visible message gives
-> actionable Chrome update/restart, memory, or model-reinstall guidance rather than
-> claiming that selected text will be analyzed remotely.
-> 10. Upgrade QA: load a populated pre-v1 profile, update to v1, confirm old
-> settings/model data are removed, the pinned 350M artifact installs automatically,
-> and an interrupted migration resumes without restoring the retired model.
 
 ## Store assets
 
