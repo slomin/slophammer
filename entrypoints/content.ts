@@ -1,5 +1,5 @@
 import { createClassifyWatchdog } from '@/content/classify-watchdog'
-import { buildCard, type CardElements } from '@/content/card-dom'
+import { buildCard, demoteFromTopLayer, promoteToTopLayer, type CardElements } from '@/content/card-dom'
 import { renderState } from '@/content/card-state'
 import { formatResultSummary } from '@/content/result-summary'
 import {
@@ -361,6 +361,16 @@ export default defineContentScript({
 
       if (state === prev) return
       const c = mountCard()
+      // The top layer is a stack and the last element shown is on top, so a new
+      // card re-enters it to sit above anything the page has opened since.
+      if (state.kind === 'idle') {
+        demoteFromTopLayer(c.host)
+      } else {
+        if (action.type === 'classify:started' || action.type === 'selection:too-short') {
+          demoteFromTopLayer(c.host)
+        }
+        promoteToTopLayer(c.host)
+      }
       if (action.type === 'classify:started') {
         c.refs.root.dataset.view = 'full'
         const startMode = settings.resultDetail
