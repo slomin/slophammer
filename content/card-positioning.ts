@@ -18,13 +18,19 @@ export interface CardSize {
   height: number
 }
 
-export type Placement = 'below' | 'above'
+// Where the card ended up relative to the text it describes. `pinned` is the
+// bottom-right corner — both a setting and the fallback for anything the card
+// cannot be anchored to. `hidden` means the text is entirely off screen, so
+// there is nothing to sit next to.
+export type Placement = 'below' | 'above' | 'beside' | 'pinned' | 'hidden'
 
-export interface CardPosition {
+export interface PlacedCard {
+  placement: Exclude<Placement, 'hidden'>
   top: number
   left: number
-  placement: Placement
 }
+
+export type CardPosition = PlacedCard | { placement: 'hidden' }
 
 function clamp(value: number, min: number, max: number): number {
   if (max < min) return min
@@ -33,21 +39,14 @@ function clamp(value: number, min: number, max: number): number {
   return value
 }
 
-// Used when there is no selection rect to anchor against — most commonly a
-// selection made inside an iframe, which the top frame's getSelection() cannot
-// see. Without this the card kept its default offsets and rendered below the
-// fold.
-export function fallbackCardPosition(args: {
-  viewport: ViewportSize
-  card: CardSize
-}): CardPosition {
+// Bottom-right, never further left/up than the margin even if the card is
+// larger than the viewport.
+export function pinnedCardPosition(args: { viewport: ViewportSize; card: CardSize }): PlacedCard {
   const { viewport, card } = args
-  // Top-right, never further left/up than the margin even if the card is
-  // larger than the viewport.
   return {
-    top: CARD_MARGIN,
+    placement: 'pinned',
+    top: Math.max(CARD_MARGIN, viewport.height - card.height - CARD_MARGIN),
     left: Math.max(CARD_MARGIN, viewport.width - card.width - CARD_MARGIN),
-    placement: 'below',
   }
 }
 
@@ -80,32 +79,60 @@ export function correctedOffsets(args: {
   return { top: args.applied.top + dTop, left: args.applied.left + dLeft }
 }
 
-export function computeCardPosition(args: {
+// Tries, in order: below the text, above it, to its right, to its left. Each
+// candidate must fit inside the viewport with the margin; the first that does
+// wins. When none fits, `lastResort` decides:
+//
+//   'pinned' — a new card goes to the corner. A user never sees a card clamped
+//              to an edge it was not asked to go to.
+//   'shift'  — a card that is already on screen and is being tracked through a
+//              scroll is shifted into the viewport instead, so it stays with
+//              its text rather than jumping to the corner mid-scroll.
+//
+// A selection entirely outside the viewport yields `hidden` whatever the last
+// resort: the card has nothing to sit next to until the text comes back.
+export function placeCard(args: {
   selection: SelectionRect
   viewport: ViewportSize
   card: CardSize
+  lastResort: 'pinned' | 'shift'
 }): CardPosition {
-  const { selection, viewport, card } = args
+  const { selection, viewport, card, lastResort } = args
 
-  const belowTop = selection.bottom + CARD_GAP
-  const fitsBelow = belowTop + card.height + CARD_MARGIN <= viewport.height
-
-  let placement: Placement
-  let top: number
-  if (fitsBelow) {
-    placement = 'below'
-    top = belowTop
-  } else {
-    const aboveTop = selection.top - card.height - CARD_GAP
-    placement = 'above'
-    top = aboveTop
-  }
+  const anchorVisible =
+    selection.bottom > 0 &&
+    selection.top < viewport.height &&
+    selection.right > 0 &&
+    selection.left < viewport.width
+  if (!anchorVisible) return { placement: 'hidden' }
 
   const maxTop = Math.max(CARD_MARGIN, viewport.height - card.height - CARD_MARGIN)
-  top = clamp(top, CARD_MARGIN, maxTop)
+  const maxLeft = Math.max(CARD_MARGIN, viewport.width - card.width - CARD_MARGIN)
+  const alignedLeft = clamp(selection.left, CARD_MARGIN, maxLeft)
 
-  const maxLeft = viewport.width - card.width - CARD_MARGIN
-  const left = clamp(selection.left, CARD_MARGIN, maxLeft)
+  const belowTop = selection.bottom + CARD_GAP
+  if (belowTop + card.height + CARD_MARGIN <= viewport.height) {
+    return { placement: 'below', top: belowTop, left: alignedLeft }
+  }
 
-  return { top, left, placement }
+  const aboveTop = selection.top - card.height - CARD_GAP
+  if (aboveTop >= CARD_MARGIN) {
+    return { placement: 'above', top: aboveTop, left: alignedLeft }
+  }
+
+  const fitsVertically = card.height + 2 * CARD_MARGIN <= viewport.height
+  if (fitsVertically) {
+    const besideTop = clamp(selection.top, CARD_MARGIN, maxTop)
+    const rightLeft = selection.right + CARD_GAP
+    if (rightLeft + card.width + CARD_MARGIN <= viewport.width) {
+      return { placement: 'beside', top: besideTop, left: rightLeft }
+    }
+    const leftLeft = selection.left - CARD_GAP - card.width
+    if (leftLeft >= CARD_MARGIN) {
+      return { placement: 'beside', top: besideTop, left: leftLeft }
+    }
+  }
+
+  if (lastResort === 'pinned') return pinnedCardPosition({ viewport, card })
+  return { placement: 'below', top: clamp(belowTop, CARD_MARGIN, maxTop), left: alignedLeft }
 }

@@ -58,6 +58,9 @@ export const CARD_STYLES = `
     color: var(--sh-heavy);
   }
   .sh-card[data-state="idle"] { display: none; }
+  /* The text it is anchored to has scrolled out of view. Keep layout so the
+     card's size is still measurable when the text comes back. */
+  .sh-card[data-hidden="true"] { visibility: hidden; }
   .hide { display: none !important; }
 
   /* view: minimised — hide everything except the head */
