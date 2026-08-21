@@ -54,6 +54,8 @@ SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test
 | `pnpm qa --no-webgpu` | Same, but with WebGPU genuinely unavailable, to exercise the fallback. |
 | `pnpm qa:runtime` | Run the whole runtime QA suite against the running browser. |
 | `pnpm qa:placement` | Measure where the result card lands on the placement torture page (`/placement`) with real inference: one PASS/FAIL row per fixture, a scroll-follow check, and a viewport sweep for the dead band. The same page is asserted without a model by `tests/e2e/card-placement.spec.ts`; this is the evidence run. |
+| `pnpm qa:upgrade` | Rehearse the v0.3.0 → current upgrade in a scratch CfT profile: builds the real 0.3.0 from its release commit, installs the retired model through its own options page, swaps in the current build at the same path, and asserts the destructive migration (wipe → download → install → ready), then kills Chrome mid-download and asserts the journal resumes. Needs the network (~830 MB). `--keep` leaves the scratch state under `references/releases/upgrade-rehearsal/`. |
+| `pnpm store:assets` | Regenerate the Chrome Web Store images from `.output/chrome-mv3`: captures the real card and options page, renders the scenes in `scripts/store-scenes.mjs` at the exact Store sizes, fails on a wrong dimension. `--copy-to <dir>` mirrors the finals. |
 | `pnpm check:package` | Audit an **existing** `.output/chrome-mv3` — no symlinks, one ONNX Runtime WASM binary at `ort/`, every `ORT_RUNTIME_FILES` entry present, JavaScript under budget. Prints the build's timestamp and sizes. Build first; `pnpm release` runs it on the packed tree and deletes the zip if it fails. |
 | `pnpm debug <cmd>` | Drive/inspect the running extension over CDP — see "Agent-driven debugging". |
 
@@ -417,6 +419,21 @@ context-menu click
   like real ones. The E2E suite passed *because* of this. Fix: fail loudly;
   the fake is test-only.
 
+- **`--load-extension` cannot rehearse an update.** Swapping the extension's
+  files on disk and relaunching Chrome with `--load-extension` on the same path
+  fires `onInstalled` with `reason: "install"` and no `previousVersion`, even
+  though the profile had 0.3.0 registered at that path — measured by reading
+  the retained console object over CDP. So a migration keyed on
+  `reason === "update"` never started and the harness reported a no-op. A
+  real Web Store update, and a Reload of a version-bumped unpacked extension,
+  report `update` with the previous version. `pnpm qa:upgrade` therefore swaps
+  the files while Chrome is running and reloads through
+  `chrome.developerPrivate.reload()` from a CDP-driven `chrome://extensions`
+  tab — after turning Developer mode on with
+  `updateProfileConfiguration({ inDeveloperMode: true })`. Without that the
+  reload silently leaves the extension `DISABLED` with
+  `unsupportedDeveloperExtension: true` (`--load-extension` bypasses that gate
+  only at launch), and the disabled bit is saved to the profile.
 - **Stable Chrome: card stuck in `loading`.** The SW's `classify:result`
   handler was `await`ing `chrome.tabs.sendMessage(tabId, msg)` inside the
   onMessage listener. Once the async work resolved and `sendResponse` fired,
@@ -476,6 +493,8 @@ messaging/             protocol types + discriminated-union guards + logger with
 scripts/               launch-chrome, launch-real-chrome, release, reload, install-cft,
                        generate-icons, serve-test-page + placement-page (torture fixtures,
                        shared with the E2E spec), qa-setup, qa-runtime, qa-placement,
+                       qa-upgrade (v0.3.0 → current migration rehearsal),
+                       capture-store-assets + store-scenes (Chrome Web Store images),
                        debug-extension, check-package (CLI) + package-audit (rules)
 tests/unit/            Vitest specs — one per pure module
 tests/fixtures/        Recorded data the specs assert against (350M token vectors)
@@ -483,6 +502,31 @@ tests/fixtures/        Recorded data the specs assert against (350M token vector
 tests/e2e/             Playwright E2E + persistent-context fixtures
 references/releases/current/unpacked   What to Load unpacked for manual testing
 ```
+
+## Release
+
+A release is two PRs around one tag, so the evidence and the artifact stay honest
+about which commit each describes:
+
+1. **Prepare** (`chore/<issue>-release-<version>`): regenerate store assets, run every
+   gate from the last code commit on the branch (the evidence commit on top may change
+   only the document that records them) — `pnpm icons` (no diff), `SLOPHAMMER_REQUIRE_VECTORS=1 pnpm test`,
+   `pnpm typecheck`, `pnpm build`, `pnpm check:package`, `pnpm test:e2e`, then with CfT up
+   `pnpm qa:runtime --expect webgpu --record …`, `pnpm qa --no-webgpu && pnpm qa:runtime
+   --expect wasm --compare …`, `pnpm qa:placement`, `pnpm qa:upgrade`, a real site via
+   `--site`, and a real context-menu classification by hand — and write the results into
+   `docs/chrome-web-store-release-evidence.md`. Merge.
+2. **Tag** the merge commit (`git tag -a v<version>`), check it out, `pnpm release`. That
+   zip — and only that zip — goes to the GitHub release and the Chrome Web Store. Record
+   its SHA-256 with the release.
+3. **Record** (`docs/<issue>-record-submission`): store item ID, listing URL, submission
+   date, review status and the zip checksum go back into the evidence doc. The issue stays
+   open in the QA column until the store-delivered build passes a clean hosted-install
+   smoke and the item is promoted public.
+
+First submissions go out as Private to trusted testers with "Publish automatically after
+it has passed review" unchecked — approval then leaves 30 days to publish by hand, which
+is the window for the store-delivered smoke.
 
 ## Out-of-project files
 
